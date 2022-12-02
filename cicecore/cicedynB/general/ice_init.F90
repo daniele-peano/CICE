@@ -1899,7 +1899,11 @@
       use ice_domain, only: nblocks, blocks_ice
       use ice_domain_size, only: ncat, nilyr, nslyr, n_iso, n_aero, nfsd
       use ice_flux, only: sst, Tf, Tair, salinz, Tmltz
+#ifdef NEMO_IN_CCSM
+      use ice_grid, only: tmask, ULON, ULAT, TLAT
+#else
       use ice_grid, only: tmask, ULON, TLAT
+#endif
       use ice_state, only: trcr_depend, aicen, trcrn, vicen, vsnon, &
           aice0, aice, vice, vsno, trcr, aice_init, bound_state, &
           n_trcr_strata, nt_strata, trcr_base, uvel, vvel
@@ -2102,6 +2106,9 @@
                              iglob,               jglob,               &
                              ice_ic,              tmask(:,:,    iblk), &
                              ULON (:,:,    iblk), &
+#ifdef NEMO_IN_CCSM
+                             ULAT (:,:,    iblk), &
+#endif
                              TLAT (:,:,    iblk), &
                              Tair (:,:,    iblk), sst  (:,:,    iblk), &
                              Tf   (:,:,    iblk),                      &
@@ -2180,6 +2187,9 @@
                                 iglob,    jglob,    &
                                 ice_ic,   tmask,    &
                                 ULON, &
+#ifdef NEMO_IN_CCSM
+                                ULAT, &
+#endif
                                 TLAT, &
                                 Tair,     sst,  &
                                 Tf,       &
@@ -2208,6 +2218,9 @@
 
       real (kind=dbl_kind), dimension (nx_block,ny_block), intent(in) :: &
          ULON   , & ! longitude of velocity pts (radians)
+#ifdef NEMO_IN_CCSM
+         ULAT   , & ! latitude of velocity pts (radians)
+#endif
          TLAT       ! latitude of temperature pts (radians)
 
       real (kind=dbl_kind), dimension (nx_block,ny_block), intent(in) :: &
@@ -2245,22 +2258,42 @@
       integer (kind=int_kind), dimension(nx_block*ny_block) :: &
          indxi, indxj    ! compressed indices for cells with aicen > puny
 
-      real (kind=dbl_kind) :: &
-         Tsfc, sum, hbar, puny, rhos, Lfresh, rad_to_deg
-
-      real (kind=dbl_kind), dimension(ncat) :: &
-         ainit, hinit    ! initial area, thickness
-
       real (kind=dbl_kind), dimension(nilyr) :: &
          qin             ! ice enthalpy (J/m3)
 
       real (kind=dbl_kind), dimension(nslyr) :: &
          qsn             ! snow enthalpy (J/m3)
 
+#ifndef NEMO_IN_CCSM
+      real (kind=dbl_kind) :: &
+         Tsfc, sum, hbar, puny, rhos, Lfresh, rad_to_deg
+
+      real (kind=dbl_kind), dimension(ncat) :: &
+         ainit, hinit    ! initial area, thickness
+
       real (kind=dbl_kind), parameter :: &
          hsno_init = 0.20_dbl_kind   , & ! initial snow thickness (m)
          edge_init_nh =  70._dbl_kind, & ! initial ice edge, N.Hem. (deg) 
          edge_init_sh = -60._dbl_kind    ! initial ice edge, S.Hem. (deg)
+#else
+      real (kind=dbl_kind) :: &
+         Tsfc, sum(2), hbar, puny, rhos, Lfresh, rad_to_deg
+
+      real (kind=dbl_kind), dimension(ncat,2) :: &
+         ainit, hinit    ! initial area, thickness
+
+      real (kind=dbl_kind), parameter :: &
+         hsno_init = 0.20_dbl_kind   , & ! initial snow thickness (m)
+         edge_init_nh =  70._dbl_kind, & ! initial ice edge, N.Hem. (deg) 
+         edge_init_sh = -68._dbl_kind    ! initial ice edge, S.Hem. (deg)
+
+      logical (kind=log_kind), dimension (nx_block,ny_block) :: &
+         imask      ! true for ice covered cells
+
+      logical (kind=log_kind) :: &
+         heat_capacity   ! from icepack
+
+#endif
 
       logical (kind=log_kind) :: tr_brine, tr_lvl
       integer (kind=int_kind) :: ntrcr
@@ -2279,6 +2312,9 @@
       call icepack_query_parameters(rhos_out=rhos, Lfresh_out=Lfresh, puny_out=puny, &
         rad_to_deg_out=rad_to_deg)
       call icepack_warnings_flush(nu_diag)
+#ifdef NEMO_IN_CCSM
+      call icepack_query_parameters(heat_capacity_out=heat_capacity)
+#endif
       if (icepack_warnings_aborted()) call abort_ice(error_message=subname, &
          file=__FILE__, line=__LINE__)
 
@@ -2312,7 +2348,7 @@
          enddo
          enddo
       enddo
-
+#ifndef NEMO_IN_CCSM
       if (trim(ice_ic) == 'default') then
 
       !-----------------------------------------------------------------
@@ -2487,7 +2523,153 @@
             enddo               ! i
          endif
       endif                     ! ice_ic
+#else
+      if (trim(ice_ic) == 'default') then
 
+      !-----------------------------------------------------------------
+      ! Place ice where ocean surface is cold.
+      ! Note: If SST is not read from a file, then the ocean is assumed
+      !       to be at its freezing point everywhere, and ice will
+      !       extend to the prescribed edges.
+      !-----------------------------------------------------------------
+
+      ! initial category areas in cells with ice
+         hbar = c2  ! initial ice thickness with greatest area
+                    ! Note: the resulting average ice thickness 
+                    ! tends to be less than hbar due to the
+                    ! nonlinear distribution of ice thicknesses 
+         sum = c0
+         do n = 1, ncat
+            if (n < ncat) then
+               hinit(n,1) = 0.3*(hin_max(n-1) + 0.78*hin_max(n)) ! m
+               hinit(n,2) = 0.2*(hin_max(n-1) + 0.5*hin_max(n)) ! m
+            else                ! n=ncat
+               hinit(n,1) = (hin_max(n-1) + c1) ! m
+               hinit(n,2) = (hin_max(n-1) + p5) ! m
+            endif
+            ! parabola, max at h=hbar, zero at h=0, 2*hbar
+            ainit(n,1) = max(c0, (c2*hbar*hinit(n,1) - hinit(n,1)**2))
+            ainit(n,2) = max(c0, (c2*hbar*hinit(n,2) - hinit(n,2)**2))
+            sum(1) = sum(1) + ainit(n,1)
+            sum(2) = sum(2) + ainit(n,2)
+         enddo
+         do n = 1, ncat
+            ainit(n,1) = ainit(n,1) / (sum(1) + puny/ncat) ! normalize
+            ainit(n,2) = ainit(n,2) / (sum(2) + puny/ncat) ! normalize
+         enddo
+
+
+         if (trim(grid_type) == 'rectangular') then
+
+         ! place ice on left side of domain
+         icells = 0
+         do j = jlo, jhi
+         do i = ilo, ihi
+            if (tmask(i,j)) then
+               if (ULON(i,j) < -50./rad_to_deg) then
+                  icells = icells + 1
+                  indxi(icells) = i
+                  indxj(icells) = j
+               endif            ! ULON
+            endif               ! tmask
+         enddo                  ! i
+         enddo                  ! j
+
+         else
+
+         imask(:,:) = .false.
+         ! NP
+         where (ULAT(:,:)<=edge_init_sh/rad_to_deg ) imask(:,:)=.true.
+         ! SH
+         where (ULAT(:,:)>=74.0_dbl_kind/rad_to_deg ) imask(:,:)=.true.
+         ! Hudson bay + Labrador
+         where (ULAT(:,:)>=51.0_dbl_kind/rad_to_deg .and. &
+                ULON(:,:)>235.0_dbl_kind/rad_to_deg .and. &
+                ULON(:,:)<=303.0_dbl_kind/rad_to_deg) imask(:,:)=.true.
+         ! Labrador + Nordic sea
+         where (ULAT(:,:)>=66.0_dbl_kind/rad_to_deg .and. &
+                ULON(:,:)>303.0_dbl_kind/rad_to_deg .and. &
+                ULON(:,:)<=342.0_dbl_kind/rad_to_deg) imask(:,:)=.true.
+         ! Nordic sea
+         where (ULAT(:,:)>=75.0_dbl_kind/rad_to_deg .and. &
+                ULON(:,:)>342.0_dbl_kind/rad_to_deg) imask(:,:)=.true.
+         where (ULAT(:,:)>=75.0_dbl_kind/rad_to_deg .and. &
+                ULON(:,:)>=0.0_dbl_kind/rad_to_deg .and. &
+                ULON(:,:)<50.0_dbl_kind/rad_to_deg) imask(:,:)=.true.
+         ! Artic - Bering
+         where (ULAT(:,:)>=60.0_dbl_kind/rad_to_deg .and. &
+                ULON(:,:)>50.0_dbl_kind/rad_to_deg .and. &
+                ULON(:,:)<=205.0_dbl_kind/rad_to_deg) imask(:,:)=.true.
+         ! Artic
+         where (ULAT(:,:)>=65.0_dbl_kind/rad_to_deg .and. &
+                ULON(:,:)>205.0_dbl_kind/rad_to_deg .and. &
+                ULON(:,:)<=235.0_dbl_kind/rad_to_deg) imask(:,:)=.true.
+
+
+         ! place ice at high latitudes where ocean sfc is cold
+         icells = 0
+         do j = jlo, jhi
+         do i = ilo, ihi
+            if (tmask(i,j)) then
+               ! place ice in high latitudes where ocean sfc is cold
+!               if ( (sst (i,j) <= Tf(i,j)+p2) .and. &
+!                    (TLAT(i,j) < edge_init_sh/rad_to_deg .or. &
+!                     TLAT(i,j) > edge_init_nh/rad_to_deg) ) then
+               if ( imask(i,j) .and. (sst (i,j) <= Tf(i,j)+p2) ) then
+                  icells = icells + 1
+                  indxi(icells) = i
+                  indxj(icells) = j
+               endif            ! cold surface
+            endif               ! tmask
+         enddo                  ! i
+         enddo                  ! j
+
+         endif                  ! rectgrid
+
+         do n = 1, ncat
+
+            ! ice volume, snow volume
+            do ij = 1, icells
+               i = indxi(ij)
+               j = indxj(ij)
+
+               if (ULAT(i,j)>=0.0) then
+                 aicen(i,j,n) = ainit(n,1)
+                 vicen(i,j,n) = hinit(n,1) * ainit(n,1) ! m
+                 vsnon(i,j,n) =min(aicen(i,j,n)*1.5*hsno_init,0.5*vicen(i,j,n))
+               else if (ULAT(i,j)<0.0) then
+                 aicen(i,j,n) = ainit(n,2)
+                 vicen(i,j,n) = hinit(n,2) * ainit(n,2) ! m
+                 vsnon(i,j,n) =min(aicen(i,j,n)*p5*hsno_init,p2*vicen(i,j,n))
+               endif
+
+               call icepack_init_trcr(Tair  = Tair(i,j), Tf = Tf(i,j),  &
+                                      Sprofile = salinz(i,j,:),         &
+                                      Tprofile = Tmltz(i,j,:),          &
+                                      Tsfc  = Tsfc,                     &
+                                      nilyr = nilyr,     nslyr = nslyr, &
+                                      qin   = qin(:),    qsn = qsn(:))
+
+               ! surface temperature
+               trcrn(i,j,nt_Tsfc,n) = Tsfc ! deg C
+            if (heat_capacity) then
+               ! ice enthalpy, salinity 
+               do k = 1, nilyr
+                  trcrn(i,j,nt_qice+k-1,n) = qin(k)
+                  trcrn(i,j,nt_sice+k-1,n) = salinz(i,j,k)
+               enddo
+               ! snow enthalpy
+               do k = 1, nslyr
+                  trcrn(i,j,nt_qsno+k-1,n) = qsn(k)
+               enddo               ! nslyr
+               ! brine fraction
+               if (tr_brine) trcrn(i,j,nt_fbri,n) = c1
+
+            end if
+            enddo               ! ij
+         enddo                  ! ncat
+      endif                     ! ice_ic
+#endif
       call icepack_warnings_flush(nu_diag)
       if (icepack_warnings_aborted()) call abort_ice(error_message=subname, &
          file=__FILE__, line=__LINE__)

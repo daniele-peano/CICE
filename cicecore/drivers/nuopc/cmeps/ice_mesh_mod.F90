@@ -207,6 +207,9 @@ contains
   subroutine ice_mesh_setmask_from_maskfile(ice_maskfile, ice_mesh, rc)
 
     use ice_grid      , only : tlon, tlat, hm, tarea
+#ifdef NEMO_IN_CCSM
+    use ice_grid      , only : hm_i, tmask_i
+#endif 
     use ice_constants , only : c0, c1, c2, p25, radius
 
     ! input/output variables
@@ -367,7 +370,11 @@ contains
              tlon(i,j,iblk) = ownedElemCoords(2*n-1) * deg_to_rad
              tlat(i,j,iblk) = ownedElemCoords(2*n) * deg_to_rad
              tarea(i,j,iblk) = mesh_areas(n) * (radius*radius)
+#ifdef NEMO_IN_CCSM
+             hm_i(i,j,iblk) = real(ice_mask(n),kind=dbl_kind)
+#else
              hm(i,j,iblk) = real(ice_mask(n),kind=dbl_kind)
+#endif
              ocn_gridcell_frac(i,j,iblk) = ice_frac(n)
           enddo
        enddo
@@ -632,6 +639,7 @@ contains
              lon(n) = tlon(i,j,iblk)*rad_to_deg
              lat(n) = tlat(i,j,iblk)*rad_to_deg
 
+#ifndef NEMO_IN_CCSM
              tmplon = lon(n)
              if(tmplon < c0)tmplon = tmplon + c360
 
@@ -648,7 +656,22 @@ contains
                 call abort_ice(error_message=subname, &
                      file=__FILE__, line=__LINE__)
              end if
-
+#else
+             ! error check differences between internally generated lons and
+             ! those read in
+             diff_lon = abs(lonMesh(n) - lon(n))
+             if ( (diff_lon > 1.e2  .and. abs(diff_lon - 360.) > 1.e-1) .or.&
+                  (diff_lon > 1.e-3 .and. diff_lon < c1) ) then
+                write(6,100)n,lonMesh(n),lon(n), diff_lon
+                !call abort_ice ('aborting due to mismatch of mesh lon and input
+                !cice lon')
+             end if
+             if (abs(latMesh(n) - lat(n)) > 1.e-1) then
+                write(6,101)n,latMesh(n),lat(n), abs(latMesh(n)-lat(n))
+                !call abort_ice ('aborting due to mismatch of mesh lat and input
+                !cice lat')
+             end if
+#endif
           enddo
        enddo
     enddo

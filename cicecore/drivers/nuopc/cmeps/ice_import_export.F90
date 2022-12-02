@@ -41,6 +41,10 @@ module ice_import_export
   use shr_frz_mod        , only : shr_frz_freezetemp
   use shr_mpi_mod        , only : shr_mpi_min, shr_mpi_max
 #endif
+#ifdef NEMO_IN_CCSM
+  use ice_grid           , only : hm_i, tmask_i
+  use ice_boundary       , only : nemo_HaloUpdate
+#endif
 
   implicit none
   public
@@ -524,12 +528,19 @@ contains
     if (ChkErr(rc,__LINE__,u_FILE_u)) return
 
     ! perform a halo update
-
+#ifdef NEMO_IN_CCSM
+     ! NEMO halo always updated in either coupled of prescribed_ice mode
+     call t_startf ('cice_imp_halo')
+     call nemo_HaloUpdate(aflds, halo_info, field_loc_center, &
+                                           field_type_scalar)
+     call t_stopf ('cice_imp_halo')
+#else
     if (.not.prescribed_ice) then
        call t_startf ('cice_imp_halo')
        call ice_HaloUpdate(aflds, halo_info, field_loc_center, field_type_scalar)
        call t_stopf ('cice_imp_halo')
     endif
+#endif
 
     ! now fill in the ice internal data types
 
@@ -611,12 +622,19 @@ contains
     call state_getimport(importState, 'sea_surface_slope_merid', output=aflds, index=6, rc=rc)
     if (ChkErr(rc,__LINE__,u_FILE_u)) return
 
-
+#ifdef NEMO_IN_CCSM
+     ! NEMO halo always updated in either coupled of prescribed_ice mode
+     call t_startf ('cice_imp_halo')
+     call nemo_HaloUpdate(aflds, halo_info, field_loc_center, &
+                                          field_type_vector)
+     call t_stopf ('cice_imp_halo')
+#else
     if (.not.prescribed_ice) then
        call t_startf ('cice_imp_halo')
        call ice_HaloUpdate(aflds, halo_info, field_loc_center, field_type_vector)
        call t_stopf ('cice_imp_halo')
     endif
+#endif
 
     !$OMP PARALLEL DO PRIVATE(iblk,i,j)
     do iblk = 1, nblocks
@@ -929,7 +947,11 @@ contains
        jhi = this_block%jhi
        do j = jlo,jhi
           do i = ilo,ihi
+#ifdef NEMO_IN_CCSM
+             if (tmask_i(i,j,iblk) .and. ailohi(i,j,iblk) < c0 ) then
+#else
              if (tmask(i,j,iblk) .and. ailohi(i,j,iblk) < c0 ) then
+#endif
                 flag = .true.
              endif
           end do
@@ -944,7 +966,11 @@ contains
           jhi = this_block%jhi
           do j = jlo,jhi
              do i = ilo,ihi
+#ifdef NEMO_IN_CCSM
+                if (tmask_i(i,j,iblk) .and. ailohi(i,j,iblk) < c0 ) then
+#else
                 if (tmask(i,j,iblk) .and. ailohi(i,j,iblk) < c0 ) then
+#endif
                    write(nu_diag,*) &
                         ' (ice) send: ERROR ailohi < 0.0 ',i,j,ailohi(i,j,iblk)
                    call flush_fileunit(nu_diag)
@@ -994,44 +1020,94 @@ contains
     ! ----
 
     ! surface temperature of ice covered portion (degK)
+#ifdef NEMO_IN_CCSM
+    call state_setexport(exportState, 'sea_ice_surface_temperature', input=Tsrf , lmask=tmask_i, ifrac=ailohi, rc=rc)
+    if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#else
     call state_setexport(exportState, 'sea_ice_surface_temperature', input=Tsrf , lmask=tmask, ifrac=ailohi, rc=rc)
     if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#endif
 
     ! albedo vis dir
+#ifdef NEMO_IN_CCSM
+    call state_setexport(exportState, 'inst_ice_vis_dir_albedo', input=alvdr, lmask=tmask_i, ifrac=ailohi, rc=rc)
+    if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#else
     call state_setexport(exportState, 'inst_ice_vis_dir_albedo', input=alvdr, lmask=tmask, ifrac=ailohi, rc=rc)
     if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#endif
 
     ! albedo nir dir
+#ifdef NEMO_IN_CCSM
+    call state_setexport(exportState, 'inst_ice_ir_dir_albedo', input=alidr, lmask=tmask_i, ifrac=ailohi, rc=rc)
+    if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#else
     call state_setexport(exportState, 'inst_ice_ir_dir_albedo', input=alidr, lmask=tmask, ifrac=ailohi, rc=rc)
     if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#endif
 
     ! albedo vis dif
+#ifdef NEMO_IN_CCSM
+    call state_setexport(exportState, 'inst_ice_vis_dif_albedo', input=alvdf, lmask=tmask_i, ifrac=ailohi, rc=rc)
+    if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#else
     call state_setexport(exportState, 'inst_ice_vis_dif_albedo', input=alvdf, lmask=tmask, ifrac=ailohi, rc=rc)
     if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#endif
 
     ! albedo nir dif
+#ifdef NEMO_IN_CCSM
+    call state_setexport(exportState, 'inst_ice_ir_dif_albedo', input=alidf, lmask=tmask_i, ifrac=ailohi, rc=rc)
+    if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#else
     call state_setexport(exportState, 'inst_ice_ir_dif_albedo', input=alidf, lmask=tmask, ifrac=ailohi, rc=rc)
     if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#endif
 
     ! 10m atm reference wind speed (m/s)
+#ifdef NEMO_IN_CCSM
+    call state_setexport(exportState, 'Si_u10'  , input=Uref , lmask=tmask_i, ifrac=ailohi, rc=rc)
+    if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#else
     call state_setexport(exportState, 'Si_u10'  , input=Uref , lmask=tmask, ifrac=ailohi, rc=rc)
     if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#endif
 
     ! 2m atm reference temperature (K)
+#ifdef NEMO_IN_CCSM
+    call state_setexport(exportState, 'Si_tref' , input=Tref , lmask=tmask_i, ifrac=ailohi, rc=rc)
+    if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#else
     call state_setexport(exportState, 'Si_tref' , input=Tref , lmask=tmask, ifrac=ailohi, rc=rc)
     if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#endif
 
     ! 2m atm reference spec humidity (kg/kg)
+#ifdef NEMO_IN_CCSM
+    call state_setexport(exportState, 'Si_qref' , input=Qref , lmask=tmask_i, ifrac=ailohi, rc=rc)
+    if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#else
     call state_setexport(exportState, 'Si_qref' , input=Qref , lmask=tmask, ifrac=ailohi, rc=rc)
     if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#endif
 
     ! Snow volume
+#ifdef NEMO_IN_CCSM
+    call state_setexport(exportState, 'mean_snow_volume' , input=vsno , lmask=tmask_i, ifrac=ailohi, rc=rc)
+    if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#else
     call state_setexport(exportState, 'mean_snow_volume' , input=vsno , lmask=tmask, ifrac=ailohi, rc=rc)
     if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#endif
 
     ! Ice volume
+#ifdef NEMO_IN_CCSM
+    call state_setexport(exportState, 'mean_ice_volume' , input=vice , lmask=tmask_i, ifrac=ailohi, rc=rc)
+    if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#else
     call state_setexport(exportState, 'mean_ice_volume' , input=vice , lmask=tmask, ifrac=ailohi, rc=rc)
     if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#endif
 
     ! Snow height
     do iblk = 1, nblocks
@@ -1042,107 +1118,218 @@ contains
        jhi = this_block%jhi
        do j = jlo, jhi
           do i = ilo, ihi
+#ifdef NEMO_IN_CCSM
+             if ( tmask_i(i,j,iblk) .and. ailohi(i,j,iblk) > c0 ) then
+#else
              if ( tmask(i,j,iblk) .and. ailohi(i,j,iblk) > c0 ) then
+#endif
                 tempfld(i,j,iblk) = vsno(i,j,iblk)/ailohi(i,j,iblk)
              end if
           end do
        end do
     end do
+#ifdef NEMO_IN_CCSM
+    call state_setexport(exportState, 'Si_snowh' , input=tempfld , lmask=tmask_i, ifrac=ailohi, rc=rc)
+    if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#else
     call state_setexport(exportState, 'Si_snowh' , input=tempfld , lmask=tmask, ifrac=ailohi, rc=rc)
     if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#endif
 
     ! ------
     ! ice/atm fluxes computed by ice
     ! ------
 
     ! Zonal air/ice stress
+#ifdef NEMO_IN_CCSM
+    call state_setexport(exportState, 'stress_on_air_ice_zonal' , input=tauxa, lmask=tmask_i, ifrac=ailohi, &
+         areacor=mod2med_areacor, rc=rc)
+    if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#else
     call state_setexport(exportState, 'stress_on_air_ice_zonal' , input=tauxa, lmask=tmask, ifrac=ailohi, &
          areacor=mod2med_areacor, rc=rc)
     if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#endif
 
     ! Meridional air/ice stress
+#ifdef NEMO_IN_CCSM
+    call state_setexport(exportState, 'stress_on_air_ice_merid' , input=tauya, lmask=tmask_i, ifrac=ailohi, &
+         areacor=mod2med_areacor, rc=rc)
+    if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#else
     call state_setexport(exportState, 'stress_on_air_ice_merid' , input=tauya, lmask=tmask, ifrac=ailohi, &
          areacor=mod2med_areacor, rc=rc)
     if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#endif
 
     ! Latent heat flux (atm into ice)
+#ifdef NEMO_IN_CCSM
+    call state_setexport(exportState, 'mean_laten_heat_flx_atm_into_ice' , input=flat, lmask=tmask_i, ifrac=ailohi, &
+         areacor=mod2med_areacor, rc=rc)
+    if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#else
     call state_setexport(exportState, 'mean_laten_heat_flx_atm_into_ice' , input=flat, lmask=tmask, ifrac=ailohi, &
          areacor=mod2med_areacor, rc=rc)
     if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#endif
 
     ! Sensible heat flux (atm into ice)
+#ifdef NEMO_IN_CCSM
+    call state_setexport(exportState, 'mean_sensi_heat_flx_atm_into_ice' , input=fsens, lmask=tmask_i, ifrac=ailohi, &
+         areacor=mod2med_areacor, rc=rc)
+    if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#else
     call state_setexport(exportState, 'mean_sensi_heat_flx_atm_into_ice' , input=fsens, lmask=tmask, ifrac=ailohi, &
          areacor=mod2med_areacor, rc=rc)
     if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#endif
 
     ! longwave outgoing (upward), average over ice fraction only
+#ifdef NEMO_IN_CCSM
+    call state_setexport(exportState, 'mean_up_lw_flx_ice' , input=flwout, lmask=tmask_i, ifrac=ailohi, &
+         areacor=mod2med_areacor, rc=rc)
+    if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#else
     call state_setexport(exportState, 'mean_up_lw_flx_ice' , input=flwout, lmask=tmask, ifrac=ailohi, &
          areacor=mod2med_areacor, rc=rc)
     if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#endif
 
     ! Evaporative water flux (kg/m^2/s)
+#ifdef NEMO_IN_CCSM
+    call state_setexport(exportState, 'mean_evap_rate_atm_into_ice' , input=evap, lmask=tmask_i, ifrac=ailohi, &
+         areacor=mod2med_areacor, rc=rc)
+    if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#else
     call state_setexport(exportState, 'mean_evap_rate_atm_into_ice' , input=evap, lmask=tmask, ifrac=ailohi, &
          areacor=mod2med_areacor, rc=rc)
     if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#endif
 
     ! Shortwave flux absorbed in ice and ocean (W/m^2)
+#ifdef NEMO_IN_CCSM
+    call state_setexport(exportState, 'Faii_swnet' , input=fswabs, lmask=tmask_i, ifrac=ailohi, &
+         areacor=mod2med_areacor, rc=rc)
+    if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#else
     call state_setexport(exportState, 'Faii_swnet' , input=fswabs, lmask=tmask, ifrac=ailohi, &
          areacor=mod2med_areacor, rc=rc)
     if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#endif
 
     ! ------
     ! ice/ocn fluxes computed by ice
     ! ------
 
     ! flux of shortwave through ice to ocean
+#ifdef NEMO_IN_CCSM
+    call state_setexport(exportState, 'mean_sw_pen_to_ocn' , input=fswthru, lmask=tmask_i, ifrac=ailohi, &
+         areacor=mod2med_areacor, rc=rc)
+    if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#else
     call state_setexport(exportState, 'mean_sw_pen_to_ocn' , input=fswthru, lmask=tmask, ifrac=ailohi, &
          areacor=mod2med_areacor, rc=rc)
     if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#endif
 
     ! flux of vis dir shortwave through ice to ocean
+#ifdef NEMO_IN_CCSM
+    call state_setexport(exportState, 'mean_sw_pen_to_ocn_vis_dir_flx' , input=fswthru_vdr, lmask=tmask_i, ifrac=ailohi, &
+         areacor=mod2med_areacor, rc=rc)
+    if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#else
     call state_setexport(exportState, 'mean_sw_pen_to_ocn_vis_dir_flx' , input=fswthru_vdr, lmask=tmask, ifrac=ailohi, &
          areacor=mod2med_areacor, rc=rc)
     if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#endif
 
     ! flux of vis dif shortwave through ice to ocean
+#ifdef NEMO_IN_CCSM
+    call state_setexport(exportState, 'mean_sw_pen_to_ocn_vis_dif_flx' , input=fswthru_vdf, lmask=tmask_i, ifrac=ailohi, &
+         areacor=mod2med_areacor, rc=rc)
+    if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#else
     call state_setexport(exportState, 'mean_sw_pen_to_ocn_vis_dif_flx' , input=fswthru_vdf, lmask=tmask, ifrac=ailohi, &
          areacor=mod2med_areacor, rc=rc)
     if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#endif
 
     ! flux of ir dir shortwave through ice to ocean
+#ifdef NEMO_IN_CCSM
+    call state_setexport(exportState, 'mean_sw_pen_to_ocn_ir_dir_flx' , input=fswthru_idr, lmask=tmask_i, ifrac=ailohi, &
+         areacor=mod2med_areacor, rc=rc)
+    if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#else
     call state_setexport(exportState, 'mean_sw_pen_to_ocn_ir_dir_flx' , input=fswthru_idr, lmask=tmask, ifrac=ailohi, &
          areacor=mod2med_areacor, rc=rc)
     if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#endif
 
     ! flux of ir dif shortwave through ice to ocean
+#ifdef NEMO_IN_CCSM
+    call state_setexport(exportState, 'mean_sw_pen_to_ocn_ir_dif_flx' , input=fswthru_idf, lmask=tmask_i, ifrac=ailohi, &
+         areacor=mod2med_areacor, rc=rc)
+    if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#else
     call state_setexport(exportState, 'mean_sw_pen_to_ocn_ir_dif_flx' , input=fswthru_idf, lmask=tmask, ifrac=ailohi, &
          areacor=mod2med_areacor, rc=rc)
     if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#endif
 
     ! flux of heat exchange with ocean
+#ifdef NEMO_IN_CCSM
+    call state_setexport(exportState, 'net_heat_flx_to_ocn' , input=fhocn, lmask=tmask_i, ifrac=ailohi, &
+         areacor=mod2med_areacor, rc=rc)
+    if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#else
     call state_setexport(exportState, 'net_heat_flx_to_ocn' , input=fhocn, lmask=tmask, ifrac=ailohi, &
          areacor=mod2med_areacor, rc=rc)
     if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#endif
 
     ! flux fresh water to ocean (h2o flux from melting)
+#ifdef NEMO_IN_CCSM
+    call state_setexport(exportState, 'mean_fresh_water_to_ocean_rate' , input=fresh, lmask=tmask_i, ifrac=ailohi, &
+         areacor=mod2med_areacor, rc=rc)
+    if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#else
     call state_setexport(exportState, 'mean_fresh_water_to_ocean_rate' , input=fresh, lmask=tmask, ifrac=ailohi, &
          areacor=mod2med_areacor, rc=rc)
     if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#endif
 
     ! flux of salt to ocean (salt flux from melting)
+#ifdef NEMO_IN_CCSM
+    call state_setexport(exportState, 'mean_salt_rate' , input=fsalt, lmask=tmask_i, ifrac=ailohi, &
+         areacor=mod2med_areacor, rc=rc)
+    if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#else
     call state_setexport(exportState, 'mean_salt_rate' , input=fsalt, lmask=tmask, ifrac=ailohi, &
          areacor=mod2med_areacor, rc=rc)
     if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#endif
 
     ! stress n i/o zonal
+#ifdef NEMO_IN_CCSM
+    call state_setexport(exportState, 'stress_on_ocn_ice_zonal' , input=tauxo, lmask=tmask_i, ifrac=ailohi, &
+         areacor=mod2med_areacor, rc=rc)
+    if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#else
     call state_setexport(exportState, 'stress_on_ocn_ice_zonal' , input=tauxo, lmask=tmask, ifrac=ailohi, &
          areacor=mod2med_areacor, rc=rc)
     if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#endif
 
     ! stress n i/o meridional
+#ifdef NEMO_IN_CCSM
+    call state_setexport(exportState, 'stress_on_ocn_ice_merid' , input=tauyo, lmask=tmask_i, ifrac=ailohi, &
+         areacor=mod2med_areacor, rc=rc)
+    if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#else
     call state_setexport(exportState, 'stress_on_ocn_ice_merid' , input=tauyo, lmask=tmask, ifrac=ailohi, &
          areacor=mod2med_areacor, rc=rc)
     if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#endif
 
     ! ------
     ! optional aerosol fluxes to ocean
@@ -1150,23 +1337,41 @@ contains
 
     ! hydrophobic bc
     if (State_FldChk(exportState, 'Fioi_bcpho')) then
+#ifdef NEMO_IN_CCSM
+       call state_setexport(exportState, 'Fioi_bcpho' , input=faero_ocn, index=1, lmask=tmask_i, ifrac=ailohi, &
+            areacor=mod2med_areacor, rc=rc)
+       if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#else
        call state_setexport(exportState, 'Fioi_bcpho' , input=faero_ocn, index=1, lmask=tmask, ifrac=ailohi, &
             areacor=mod2med_areacor, rc=rc)
        if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#endif
     end if
 
     ! hydrophilic bc
     if (State_FldChk(exportState, 'Fioi_bcphi')) then
+#ifdef NEMO_IN_CCSM
+       call state_setexport(exportState, 'Fioi_bcphi' , input=faero_ocn, index=2, lmask=tmask_i, ifrac=ailohi, &
+            areacor=mod2med_areacor, rc=rc)
+       if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#else
        call state_setexport(exportState, 'Fioi_bcphi' , input=faero_ocn, index=2, lmask=tmask, ifrac=ailohi, &
             areacor=mod2med_areacor, rc=rc)
        if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#endif
     end if
 
     ! dust
     if (State_FldChk(exportState, 'Fioi_flxdst')) then
+#ifdef NEMO_IN_CCSM
+       call state_setexport(exportState, 'Fioi_flxdst' , input=faero_ocn, index=3, lmask=tmask_i, ifrac=ailohi, &
+            areacor=mod2med_areacor, rc=rc)
+       if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#else
        call state_setexport(exportState, 'Fioi_flxdst' , input=faero_ocn, index=3, lmask=tmask, ifrac=ailohi, &
             areacor=mod2med_areacor, rc=rc)
        if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#endif
     end if
 
     ! ------
@@ -1178,6 +1383,17 @@ contains
        ! 18O => ungridded_index=2
        ! HDO => ungridded_index=3
 
+#ifdef NEMO_IN_CCSM
+       call state_setexport(exportState, 'mean_fresh_water_to_ocean_rate_wiso' , input=fiso_ocn, index=1, &
+            lmask=tmask_i, ifrac=ailohi, ungridded_index=3, areacor=mod2med_areacor, rc=rc)
+       if (ChkErr(rc,__LINE__,u_FILE_u)) return
+       call state_setexport(exportState, 'mean_fresh_water_to_ocean_rate_wiso' , input=fiso_ocn, index=2, &
+            lmask=tmask_i, ifrac=ailohi, ungridded_index=1, areacor=mod2med_areacor, rc=rc)
+       if (ChkErr(rc,__LINE__,u_FILE_u)) return
+       call state_setexport(exportState, 'mean_fresh_water_to_ocean_rate_wiso' , input=fiso_ocn, index=3, &
+            lmask=tmask_i, ifrac=ailohi, ungridded_index=2, areacor=mod2med_areacor, rc=rc)
+       if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#else
        call state_setexport(exportState, 'mean_fresh_water_to_ocean_rate_wiso' , input=fiso_ocn, index=1, &
             lmask=tmask, ifrac=ailohi, ungridded_index=3, areacor=mod2med_areacor, rc=rc)
        if (ChkErr(rc,__LINE__,u_FILE_u)) return
@@ -1187,6 +1403,7 @@ contains
        call state_setexport(exportState, 'mean_fresh_water_to_ocean_rate_wiso' , input=fiso_ocn, index=3, &
             lmask=tmask, ifrac=ailohi, ungridded_index=2, areacor=mod2med_areacor, rc=rc)
        if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#endif
     end if
 
     ! ------
@@ -1195,6 +1412,17 @@ contains
 
     if (State_FldChk(exportState, 'mean_evap_rate_atm_into_ice_wiso')) then
        !  Isotope evap to atm
+#ifdef NEMO_IN_CCSM
+       call state_setexport(exportState, 'mean_evap_rate_atm_into_ice_wiso' , input=fiso_evap, index=1, &
+            lmask=tmask_i, ifrac=ailohi, ungridded_index=3, areacor=mod2med_areacor, rc=rc)
+       if (ChkErr(rc,__LINE__,u_FILE_u)) return
+       call state_setexport(exportState, 'mean_evap_rate_atm_into_ice_wiso' , input=fiso_evap, index=2, &
+            lmask=tmask_i, ifrac=ailohi, ungridded_index=1, areacor=mod2med_areacor, rc=rc)
+       if (ChkErr(rc,__LINE__,u_FILE_u)) return
+       call state_setexport(exportState, 'mean_evap_rate_atm_into_ice_wiso' , input=fiso_evap, index=3, &
+            lmask=tmask_i, ifrac=ailohi, ungridded_index=2, areacor=mod2med_areacor, rc=rc)
+       if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#else
        call state_setexport(exportState, 'mean_evap_rate_atm_into_ice_wiso' , input=fiso_evap, index=1, &
             lmask=tmask, ifrac=ailohi, ungridded_index=3, areacor=mod2med_areacor, rc=rc)
        if (ChkErr(rc,__LINE__,u_FILE_u)) return
@@ -1204,8 +1432,20 @@ contains
        call state_setexport(exportState, 'mean_evap_rate_atm_into_ice_wiso' , input=fiso_evap, index=3, &
             lmask=tmask, ifrac=ailohi, ungridded_index=2, areacor=mod2med_areacor, rc=rc)
        if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#endif
 
        !  qref to atm
+#ifdef NEMO_IN_CCSM
+       call state_setexport(exportState, 'Si_qref_wiso' , input=Qref_iso, index=1, &
+            lmask=tmask_i, ifrac=ailohi, ungridded_index=3, rc=rc)
+       if (ChkErr(rc,__LINE__,u_FILE_u)) return
+       call state_setexport(exportState, 'Si_qref_wiso' , input=Qref_iso, index=2, &
+            lmask=tmask_i, ifrac=ailohi, ungridded_index=1, rc=rc)
+       if (ChkErr(rc,__LINE__,u_FILE_u)) return
+       call state_setexport(exportState, 'Si_qref_wiso' , input=Qref_iso, index=3, &
+            lmask=tmask_i, ifrac=ailohi, ungridded_index=2, rc=rc)
+       if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#else
        call state_setexport(exportState, 'Si_qref_wiso' , input=Qref_iso, index=1, &
             lmask=tmask, ifrac=ailohi, ungridded_index=3, rc=rc)
        if (ChkErr(rc,__LINE__,u_FILE_u)) return
@@ -1215,6 +1455,7 @@ contains
        call state_setexport(exportState, 'Si_qref_wiso' , input=Qref_iso, index=3, &
             lmask=tmask, ifrac=ailohi, ungridded_index=2, rc=rc)
        if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#endif
     endif
 
     ! ------
@@ -1232,9 +1473,15 @@ contains
           ! penetrative shortwave by category
           ! Note: no need zero out pass-through fields over land for benefit of x2oacc fields in cpl hist files since
           ! the export state has been zeroed out at the beginning
+#ifdef NEMO_IN_CCSM
+          call state_setexport(exportState, 'mean_sw_pen_to_ocn_ifrac_n', input=fswthrun_ai, index=n, &
+               lmask=tmask_i, ifrac=ailohi, ungridded_index=n, areacor=mod2med_areacor, rc=rc)
+          if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#else
           call state_setexport(exportState, 'mean_sw_pen_to_ocn_ifrac_n', input=fswthrun_ai, index=n, &
                lmask=tmask, ifrac=ailohi, ungridded_index=n, areacor=mod2med_areacor, rc=rc)
           if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#endif
        end do
     end if
 

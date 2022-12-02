@@ -122,7 +122,11 @@ contains
     stream_varname      = 'ice_cov'
     stream_meshfile     = ' '
     stream_datafiles(:) = ' '
+#ifdef NEMO_IN_CCSM
+    stream_mapalgo      = 'none'
+#else
     stream_mapalgo      = 'bilinear'
+#endif
 
     ! read namelist on master task
     if (my_task == master_task) then

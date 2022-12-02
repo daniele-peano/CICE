@@ -84,6 +84,10 @@ module ice_comp_nuopc
   character(len=*),parameter   :: shr_cal_gregorian = 'GREGORIAN'
 
   type(ESMF_Mesh)              :: ice_mesh
+#ifdef NEMO_IN_CCSM
+  type(ESMF_Mesh)         :: tmpMesh
+  type(ESMF_Grid)         :: Egrid
+#endif
 
   integer                      :: nthrds   ! Number of threads to use in this component
 
@@ -579,9 +583,26 @@ contains
        if (ChkErr(rc,__LINE__,u_FILE_u)) return
 
        ! Read in the ice mesh on the cice distribution
+#ifdef NEMO_IN_CCSM
+       Egrid = ESMF_GridCreate(filename=trim(ice_meshfile),fileformat=ESMF_FILEFORMAT_SCRIP, addCornerStagger=.true., rc=rc)
+       if (ChkErr(rc,__LINE__,u_FILE_u)) return
+
+       tmpMesh = ESMF_MeshCreate(grid=Egrid, rc=rc)
+       if (ChkErr(rc,__LINE__,u_FILE_u)) return
+
+       call ESMF_GridDestroy(Egrid, rc=rc)
+       if (ChkErr(rc,__LINE__,u_FILE_u)) return
+
+       ice_mesh = ESMF_MeshCreate(mesh=tmpMesh, elementDistGrid=ice_distgrid, rc=rc)
+       if (ChkErr(rc,__LINE__,u_FILE_u)) return
+
+       call ESMF_MeshDestroy(tmpMesh, rc=rc)
+       if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#else
        ice_mesh = ESMF_MeshCreate(filename=trim(ice_meshfile), fileformat=ESMF_FILEFORMAT_ESMFMESH, &
             elementDistGrid=ice_distgrid, rc=rc)
        if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#endif
 
        ! Initialize the cice mesh and the cice mask
        if (trim(grid_type) == 'setmask') then
