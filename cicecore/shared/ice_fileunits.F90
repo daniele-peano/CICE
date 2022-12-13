@@ -51,6 +51,8 @@
          nu_restart_lvl, &  ! restart input file for level ice tracers
          nu_dump_pond  , &  ! dump file for restarting melt pond tracer
          nu_restart_pond,&  ! restart input file for melt pond tracer
+         nu_dump_snow  , &  ! dump file for restarting snow redist/metamorph tracers
+         nu_restart_snow,&  ! restart input file for snow redist/metamorph tracers
          nu_dump_fsd   , &  ! dump file for restarting floe size distribution
          nu_restart_fsd, &  ! restart input file for floe size distribution
          nu_dump_iso   , &  ! dump file for restarting isotope tracers
@@ -114,7 +116,8 @@
          ice_IOUnitsInUse(ice_stdout) = .true. ! reserve unit 6
          ice_IOUnitsInUse(ice_stderr) = .true.
          if (nu_diag >= 1 .and. nu_diag <= ice_IOUnitsMaxUnit) &
-            ice_IOUnitsInUse(nu_diag) = .true. ! reserve unit nu_diag
+              ice_IOUnitsInUse(nu_diag) = .true. ! reserve unit nu_diag
+         if (nu_diag < 0) nu_diag_set = .true.
 
          call get_fileunit(nu_grid)
          call get_fileunit(nu_kmt)
@@ -129,6 +132,8 @@
          call get_fileunit(nu_restart_lvl)
          call get_fileunit(nu_dump_pond)
          call get_fileunit(nu_restart_pond)
+         call get_fileunit(nu_dump_snow)
+         call get_fileunit(nu_restart_snow)
          call get_fileunit(nu_dump_fsd)
          call get_fileunit(nu_restart_fsd)
          call get_fileunit(nu_dump_iso)
@@ -218,6 +223,8 @@
          call release_fileunit(nu_restart_lvl)
          call release_fileunit(nu_dump_pond)
          call release_fileunit(nu_restart_pond)
+         call release_fileunit(nu_dump_snow)
+         call release_fileunit(nu_restart_snow)
          call release_fileunit(nu_dump_fsd)
          call release_fileunit(nu_restart_fsd)
          call release_fileunit(nu_dump_iso)
@@ -233,7 +240,7 @@
          call release_fileunit(nu_rst_pointer)
          call release_fileunit(nu_history)
          call release_fileunit(nu_hdr)
-         if (nu_diag /= ice_stdout) call release_fileunit(nu_diag)
+         if (nu_diag > 0 .and. nu_diag /= ice_stdout) call release_fileunit(nu_diag)
 
       end subroutine release_all_fileunits
 

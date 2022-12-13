@@ -135,7 +135,9 @@ contains
        write(nu_diag,*)'send_i2x_per_cat = ',send_i2x_per_cat
     end if
     if (.not.send_i2x_per_cat) then
-       deallocate(fswthrun_ai)
+       if (allocated(fswthrun_ai)) then
+          deallocate(fswthrun_ai)
+       end if
     end if
 
     ! Determine if the following attributes are sent by the driver and if so read them in
@@ -281,6 +283,7 @@ contains
 
   !==============================================================================
   subroutine ice_realize_fields(gcomp, mesh, flds_scalar_name, flds_scalar_num, rc)
+    use ice_scam, only : single_column
 
     ! input/output variables
     type(ESMF_GridComp)            :: gcomp
@@ -335,10 +338,10 @@ contains
          tag=subname//':CICE_Import',&
          mesh=mesh, rc=rc)
     if (ChkErr(rc,__LINE__,u_FILE_u)) return
-
 #ifdef CESMCOUPLED
     ! Get mesh areas from second field - using second field since the
     ! first field is the scalar field
+    if (single_column) return
 
     call ESMF_MeshGet(mesh, numOwnedElements=numOwnedElements, rc=rc)
     if (chkerr(rc,__LINE__,u_FILE_u)) return
@@ -593,7 +596,7 @@ contains
                    rhoa(i,j,iblk) = inst_pres_height_lowest / &
                         (287.058_ESMF_KIND_R8*(1._ESMF_KIND_R8+0.608_ESMF_KIND_R8*Qa(i,j,iblk))*Tair(i,j,iblk))
                 else
-                   rhoa(i,j,iblk) = 0._ESMF_KIND_R8
+                   rhoa(i,j,iblk) = 1.2_ESMF_KIND_R8
                 endif
              end do !i
           end do !j
@@ -854,6 +857,8 @@ contains
   !===============================================================================
   subroutine ice_export( exportState, rc )
 
+    use ice_scam, only : single_column
+
     ! input/output variables
     type(ESMF_State), intent(inout) :: exportState
     integer         , intent(out)   :: rc
@@ -878,6 +883,7 @@ contains
     real    (kind=dbl_kind), allocatable :: tempfld(:,:,:)
     real    (kind=dbl_kind), pointer :: dataptr_ifrac_n(:,:)
     real    (kind=dbl_kind), pointer :: dataptr_swpen_n(:,:)
+    logical (kind=log_kind), save :: first_call = .true.
     character(len=*),parameter :: subname = 'ice_export'
     !-----------------------------------------------------
 
@@ -985,8 +991,11 @@ contains
     !---------------------------------
 
     ! Zero out fields with tmask for proper coupler accumulation in ice free areas
-    call state_reset(exportState, c0, rc)
-    if (ChkErr(rc,__LINE__,u_FILE_u)) return
+    if (first_call .or. .not.single_column) then
+       call state_reset(exportState, c0, rc)
+       if (ChkErr(rc,__LINE__,u_FILE_u)) return
+       first_call = .false.
+    endif
 
     ! Create a temporary field
     allocate(tempfld(nx_block,ny_block,nblocks))

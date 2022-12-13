@@ -74,7 +74,7 @@
       use ice_arrays_column, only: oceanmixed_ice
       use ice_restart_column, only: restart_age, restart_FY, restart_lvl, &
           restart_pond_cesm, restart_pond_lvl, restart_pond_topo, restart_aero, &
-          restart_fsd, restart_iso
+          restart_fsd, restart_iso, restart_snow
       use ice_restart_shared, only: &
           restart, restart_ext, restart_coszen, restart_dir, restart_file, pointer_file, &
           runid, runtype, use_restart_time, restart_format, lcdf64
@@ -91,19 +91,24 @@
           bgc_data_type, &
           ocn_data_type, ocn_data_dir,    wave_spec_file,  &
           oceanmixed_file, restore_ocn,   trestore, & 
-          ice_data_type
+          ice_data_type, &
+          snw_filename, &
+          snw_tau_fname, snw_kappa_fname, snw_drdt0_fname, &
+          snw_rhos_fname, snw_Tgrd_fname, snw_T_fname
       use ice_arrays_column, only: bgc_data_dir, fe_data_type
       use ice_grid, only: grid_file, gridcpl_file, kmt_file, &
                           bathymetry_file, use_bathymetry, &
                           bathymetry_format, &
                           grid_type, grid_format, &
-                          dxrect, dyrect
+                          dxrect, dyrect, &
+                          pgl_global_ext
       use ice_dyn_shared, only: ndte, kdyn, revised_evp, yield_curve, &
-                                kevp_kernel, &
+                                evp_algorithm, &
                                 seabed_stress, seabed_stress_method, &
-                                k1, k2, alphab, threshold_hw, &
-                                Ktens, e_ratio, coriolis, ssh_stress, &
-                                kridge, brlx, arlx
+                                k1, k2, alphab, threshold_hw, Ktens, &
+                                e_yieldcurve, e_plasticpot, coriolis, &
+                                ssh_stress, kridge, brlx, arlx
+
       use ice_dyn_vp, only: maxits_nonlin, precond, dim_fgmres, dim_pgmres, maxits_fgmres, &
                             maxits_pgmres, monitor_nonlin, monitor_fgmres, &
                             monitor_pgmres, reltol_nonlin, reltol_fgmres, reltol_pgmres, &
@@ -128,19 +133,21 @@
         mu_rdg, hs0, dpscale, rfracmin, rfracmax, pndaspect, hs1, hp1, &
         a_rapid_mode, Rac_rapid_mode, aspect_rapid_mode, dSdt_slow_mode, &
         phi_c_slow_mode, phi_i_mushy, kalg, atmiter_conv, Pstar, Cstar, &
-        sw_frac, sw_dtemp, floediam, hfrazilmin, iceruf, iceruf_ocn
+        sw_frac, sw_dtemp, floediam, hfrazilmin, iceruf, iceruf_ocn, &
+        rsnw_fall, rsnw_tmax, rhosnew, rhosmin, rhosmax, &
+        windmin, drhosdwind, snwlvlfac
 
       integer (kind=int_kind) :: ktherm, kstrength, krdg_partic, krdg_redist, natmiter, &
         kitd, kcatbound, ktransport
 
       character (len=char_len) :: shortwave, albedo_type, conduct, fbot_xfer_type, &
-        tfrz_option, frzpnd, atmbndy, wave_spec_type
+        tfrz_option, saltflux_option, frzpnd, atmbndy, wave_spec_type, snwredist, snw_aging_table
 
       logical (kind=log_kind) :: calc_Tsfc, formdrag, highfreq, calc_strair, wave_spec, &
-                                 sw_redist, calc_dragio
+                                 sw_redist, calc_dragio, use_smliq_pnd, snwgrain
 
       logical (kind=log_kind) :: tr_iage, tr_FY, tr_lvl, tr_pond
-      logical (kind=log_kind) :: tr_iso, tr_aero, tr_fsd
+      logical (kind=log_kind) :: tr_iso, tr_aero, tr_fsd, tr_snow
       logical (kind=log_kind) :: tr_pond_cesm, tr_pond_lvl, tr_pond_topo
       integer (kind=int_kind) :: numin, numax  ! unit number limits
 
@@ -187,6 +194,7 @@
         tr_pond_cesm, restart_pond_cesm,                                &
         tr_pond_lvl, restart_pond_lvl,                                  &
         tr_pond_topo, restart_pond_topo,                                &
+        tr_snow, restart_snow,                                          &
         tr_iso, restart_iso,                                            &
         tr_aero, restart_aero,                                          &
         tr_fsd, restart_fsd,                                            &
@@ -201,20 +209,20 @@
 
       namelist /dynamics_nml/ &
         kdyn,           ndte,           revised_evp,    yield_curve,    &
-        kevp_kernel,                                                    &
+        evp_algorithm,                                                  &
         brlx,           arlx,           ssh_stress,                     &
         advection,      coriolis,       kridge,         ktransport,     &
         kstrength,      krdg_partic,    krdg_redist,    mu_rdg,         &
-        e_ratio,        Ktens,          Cf,             seabed_stress,  &
-        k1,             maxits_nonlin,  precond,        dim_fgmres,     &
+        e_yieldcurve,   e_plasticpot,   Ktens,                          &
+        maxits_nonlin,  precond,        dim_fgmres,                     &
         dim_pgmres,     maxits_fgmres,  maxits_pgmres,  monitor_nonlin, &
         monitor_fgmres, monitor_pgmres, reltol_nonlin,  reltol_fgmres,  &
         reltol_pgmres,  algo_nonlin,    dim_andacc,     reltol_andacc,  &
         damping_andacc, start_andacc,   fpfunc_andacc,  use_mean_vrel,  &
-        ortho_type,                                                     &
-        k2,             alphab,         threshold_hw,                   &
-        seabed_stress_method,           Pstar,          Cstar
-
+        ortho_type,     seabed_stress,  seabed_stress_method,           &
+        k1, k2,         alphab,         threshold_hw,                   &
+        Cf,             Pstar,          Cstar
+      
       namelist /shortwave_nml/ &
         shortwave,      albedo_type,                                    &
         albicev,        albicei,         albsnowv,      albsnowi,       &
@@ -227,11 +235,19 @@
         rfracmin,       rfracmax,        pndaspect,     hs1,            &
         hp1
 
+      namelist /snow_nml/ &
+        snwredist,      snwgrain,        rsnw_fall,     rsnw_tmax,      &
+        rhosnew,        rhosmin,         rhosmax,       snwlvlfac,      &
+        windmin,        drhosdwind,      use_smliq_pnd, snw_aging_table,&
+        snw_filename,   snw_rhos_fname,  snw_Tgrd_fname,snw_T_fname,    &
+        snw_tau_fname,  snw_kappa_fname, snw_drdt0_fname
+
       namelist /forcing_nml/ &
         formdrag,       atmbndy,         calc_strair,   calc_Tsfc,      &
         highfreq,       natmiter,        atmiter_conv,  calc_dragio,    &
         ustar_min,      emissivity,      iceruf,        iceruf_ocn,     &
         fbot_xfer_type, update_ocn_f,    l_mpond_fresh, tfrz_option,    &
+        saltflux_option, &
         oceanmixed_ice, restore_ice,     restore_ocn,   trestore,       &
         precip_units,   default_season,  wave_spec_type,nfreq,          &
         atm_data_type,  ocn_data_type,   bgc_data_type, fe_data_type,   &
@@ -329,7 +345,8 @@
       kdyn = 1           ! type of dynamics (-1, 0 = off, 1 = evp, 2 = eap, 3 = vp)
       ndtd = 1           ! dynamic time steps per thermodynamic time step
       ndte = 120         ! subcycles per dynamics timestep:  ndte=dt_dyn/dte
-      kevp_kernel = 0    ! EVP kernel (0 = 2D, >0: 1D. Only ver. 2 is implemented yet)
+      evp_algorithm = 'standard_2d'    ! EVP kernel (=standard_2d: standard cice evp; =shared_mem_1d: 1d shared memory and no mpi. if more mpi processors then executed on master
+      pgl_global_ext = .false. ! if true, init primary grid lengths (global ext.)
       brlx   = 300.0_dbl_kind ! revised_evp values. Otherwise overwritten in ice_dyn_shared
       arlx   = 300.0_dbl_kind ! revised_evp values. Otherwise overwritten in ice_dyn_shared
       revised_evp = .false.  ! if true, use revised procedure for evp dynamics
@@ -352,7 +369,8 @@
       alphab = 20.0_dbl_kind       ! alphab=Cb factor in Lemieux et al 2015
       threshold_hw = 30.0_dbl_kind ! max water depth for grounding
       Ktens = 0.0_dbl_kind   ! T=Ktens*P (tensile strength: see Konig and Holland, 2010)
-      e_ratio = 2.0_dbl_kind ! VP ellipse aspect ratio
+      e_yieldcurve = 2.0_dbl_kind ! VP aspect ratio of elliptical yield curve               
+      e_plasticpot = 2.0_dbl_kind ! VP aspect ratio of elliptical plastic potential
       maxits_nonlin = 4      ! max nb of iteration for nonlinear solver
       precond = 'pgmres'     ! preconditioner for fgmres: 'ident' (identity), 'diag' (diagonal), 'pgmres' (Jacobi-preconditioned GMRES)
       dim_fgmres = 50        ! size of fgmres Krylov subspace
@@ -409,12 +427,31 @@
       rfracmin  = 0.15_dbl_kind   ! minimum retained fraction of meltwater
       rfracmax  = 0.85_dbl_kind   ! maximum retained fraction of meltwater
       pndaspect = 0.8_dbl_kind    ! ratio of pond depth to area fraction
+      snwredist = 'none'          ! type of snow redistribution
+      snw_aging_table = 'test'    ! snow aging lookup table
+      snw_filename    = 'unknown' ! snowtable filename
+      snw_tau_fname   = 'unknown' ! snowtable file tau fieldname
+      snw_kappa_fname = 'unknown' ! snowtable file kappa fieldname
+      snw_drdt0_fname = 'unknown' ! snowtable file drdt0 fieldname
+      snw_rhos_fname  = 'unknown' ! snowtable file rhos fieldname
+      snw_Tgrd_fname  = 'unknown' ! snowtable file Tgrd fieldname
+      snw_T_fname     = 'unknown' ! snowtable file T fieldname
+      snwgrain  = .false.         ! snow metamorphosis
+      use_smliq_pnd = .false.     ! use liquid in snow for ponds
+      rsnw_fall =  100.0_dbl_kind ! radius of new snow (10^-6 m) ! advanced snow physics: 54.526 x 10^-6 m
+      rsnw_tmax = 1500.0_dbl_kind ! maximum snow radius (10^-6 m)
+      rhosnew   =  100.0_dbl_kind ! new snow density (kg/m^3)
+      rhosmin   =  100.0_dbl_kind ! minimum snow density (kg/m^3)
+      rhosmax   =  450.0_dbl_kind ! maximum snow density (kg/m^3)
+      windmin   =   10.0_dbl_kind ! minimum wind speed to compact snow (m/s)
+      drhosdwind=   27.3_dbl_kind ! wind compaction factor for snow (kg s/m^4)
+      snwlvlfac =    0.3_dbl_kind ! fractional increase in snow depth for bulk redistribution
       albicev   = 0.78_dbl_kind   ! visible ice albedo for h > ahmax
       albicei   = 0.36_dbl_kind   ! near-ir ice albedo for h > ahmax
       albsnowv  = 0.98_dbl_kind   ! cold snow albedo, visible
       albsnowi  = 0.70_dbl_kind   ! cold snow albedo, near IR
       ahmax     = 0.3_dbl_kind    ! thickness above which ice albedo is constant (m)
-      atmbndy   = 'default'       ! or 'constant'
+      atmbndy   = 'similarity'    ! Atm boundary layer: 'similarity', 'constant' or 'mixed'
       default_season  = 'winter'  ! default forcing data, if data is not read in
       fyear_init = 1900           ! first year of forcing cycle
       ycycle = 1                  ! number of years in forcing cycle
@@ -430,6 +467,7 @@
       precip_units    = 'mks'     ! 'mm_per_month' or
                                   ! 'mm_per_sec' = 'mks' = kg/m^2 s
       tfrz_option     = 'mushy'   ! freezing temp formulation
+      saltflux_option = '4psu'    ! saltflux calculation
       oceanmixed_ice  = .false.   ! if true, use internal ocean mixed layer
       wave_spec_type  = 'none'    ! type of wave spectrum forcing
       nfreq           = 25        ! number of wave frequencies
@@ -472,6 +510,8 @@
       restart_pond_lvl  = .false. ! melt ponds restart
       tr_pond_topo = .false. ! explicit melt ponds (topographic)
       restart_pond_topo = .false. ! melt ponds restart
+      tr_snow      = .false. ! advanced snow physics
+      restart_snow = .false. ! advanced snow physics restart
       tr_iso       = .false. ! isotopes
       restart_iso  = .false. ! isotopes restart
       tr_aero      = .false. ! aerosols
@@ -513,50 +553,154 @@
       nml_filename  = 'ice_in'//trim(inst_suffix)
 #endif
 
-      call get_fileunit(nu_nml)
-
       if (my_task == master_task) then
-         open (nu_nml, file=nml_filename, status='old',iostat=nml_error)
-         if (nml_error /= 0) then
-            nml_error = -1
-         else
-            nml_error =  1
-         endif 
 
+         call get_fileunit(nu_nml)
+         open (nu_nml, file=trim(nml_filename), status='old',iostat=nml_error)
+         if (nml_error /= 0) then
+            call abort_ice(subname//'ERROR: open file '// &
+               trim(nml_filename), &
+               file=__FILE__, line=__LINE__)
+         endif
+
+         write(nu_diag,*) subname,' Reading setup_nml'
+         rewind(unit=nu_nml, iostat=nml_error)
+         if (nml_error /= 0) then
+            call abort_ice(subname//'ERROR: setup_nml rewind ', &
+               file=__FILE__, line=__LINE__)
+         endif
+         nml_error =  1
          do while (nml_error > 0)
-            print*,'Reading setup_nml'
-               read(nu_nml, nml=setup_nml,iostat=nml_error)
-               if (nml_error /= 0) exit
-            print*,'Reading grid_nml'
-               read(nu_nml, nml=grid_nml,iostat=nml_error)
-               if (nml_error /= 0) exit
-            print*,'Reading tracer_nml'
-               read(nu_nml, nml=tracer_nml,iostat=nml_error)
-               if (nml_error /= 0) exit
-            print*,'Reading thermo_nml'
-               read(nu_nml, nml=thermo_nml,iostat=nml_error)
-               if (nml_error /= 0) exit
-            print*,'Reading dynamics_nml'
-               read(nu_nml, nml=dynamics_nml,iostat=nml_error)
-               if (nml_error /= 0) exit
-            print*,'Reading shortwave_nml'
-               read(nu_nml, nml=shortwave_nml,iostat=nml_error)
-               if (nml_error /= 0) exit
-            print*,'Reading ponds_nml'
-               read(nu_nml, nml=ponds_nml,iostat=nml_error)
-               if (nml_error /= 0) exit
-            print*,'Reading forcing_nml'
-               read(nu_nml, nml=forcing_nml,iostat=nml_error)
-               if (nml_error /= 0) exit
+            read(nu_nml, nml=setup_nml,iostat=nml_error)
          end do
-         if (nml_error == 0) close(nu_nml)
+         if (nml_error /= 0) then
+            call abort_ice(subname//'ERROR: setup_nml reading ', &
+               file=__FILE__, line=__LINE__)
+         endif
+
+         write(nu_diag,*) subname,' Reading grid_nml'
+         rewind(unit=nu_nml, iostat=nml_error)
+         if (nml_error /= 0) then
+            call abort_ice(subname//'ERROR: grid_nml rewind ', &
+               file=__FILE__, line=__LINE__)
+         endif
+         nml_error =  1
+         do while (nml_error > 0)
+            read(nu_nml, nml=grid_nml,iostat=nml_error)
+         end do
+         if (nml_error /= 0) then
+            call abort_ice(subname//'ERROR: grid_nml reading ', &
+               file=__FILE__, line=__LINE__)
+         endif
+
+         write(nu_diag,*) subname,' Reading tracer_nml'
+         rewind(unit=nu_nml, iostat=nml_error)
+         if (nml_error /= 0) then
+            call abort_ice(subname//'ERROR: tracer_nml rewind ', &
+               file=__FILE__, line=__LINE__)
+         endif
+         nml_error =  1
+         do while (nml_error > 0)
+            read(nu_nml, nml=tracer_nml,iostat=nml_error)
+         end do
+         if (nml_error /= 0) then
+            call abort_ice(subname//'ERROR: tracer_nml reading ', &
+               file=__FILE__, line=__LINE__)
+         endif
+
+         write(nu_diag,*) subname,' Reading thermo_nml'
+         rewind(unit=nu_nml, iostat=nml_error)
+         if (nml_error /= 0) then
+            call abort_ice(subname//'ERROR: thermo_nml rewind ', &
+               file=__FILE__, line=__LINE__)
+         endif
+         nml_error =  1
+         do while (nml_error > 0)
+            read(nu_nml, nml=thermo_nml,iostat=nml_error)
+         end do
+         if (nml_error /= 0) then
+            call abort_ice(subname//'ERROR: thermo_nml reading ', &
+               file=__FILE__, line=__LINE__)
+         endif
+
+         write(nu_diag,*) subname,' Reading dynamics_nml'
+         rewind(unit=nu_nml, iostat=nml_error)
+         if (nml_error /= 0) then
+            call abort_ice(subname//'ERROR: dynamics_nml rewind ', &
+               file=__FILE__, line=__LINE__)
+         endif
+         nml_error =  1
+         do while (nml_error > 0)
+            read(nu_nml, nml=dynamics_nml,iostat=nml_error)
+         end do
+         if (nml_error /= 0) then
+            call abort_ice(subname//'ERROR: dynamics_nml reading ', &
+               file=__FILE__, line=__LINE__)
+         endif
+
+         write(nu_diag,*) subname,' Reading shortwave_nml'
+         rewind(unit=nu_nml, iostat=nml_error)
+         if (nml_error /= 0) then
+            call abort_ice(subname//'ERROR: shortwave_nml rewind ', &
+               file=__FILE__, line=__LINE__)
+         endif
+         nml_error =  1
+         do while (nml_error > 0)
+            read(nu_nml, nml=shortwave_nml,iostat=nml_error)
+         end do
+         if (nml_error /= 0) then
+            call abort_ice(subname//'ERROR: shortwave_nml reading ', &
+               file=__FILE__, line=__LINE__)
+         endif
+
+         write(nu_diag,*) subname,' Reading ponds_nml'
+         rewind(unit=nu_nml, iostat=nml_error)
+         if (nml_error /= 0) then
+            call abort_ice(subname//'ERROR: ponds_nml rewind ', &
+               file=__FILE__, line=__LINE__)
+         endif
+         nml_error =  1
+         do while (nml_error > 0)
+            read(nu_nml, nml=ponds_nml,iostat=nml_error)
+         end do
+         if (nml_error /= 0) then
+            call abort_ice(subname//'ERROR: ponds_nml reading ', &
+               file=__FILE__, line=__LINE__)
+         endif
+
+         write(nu_diag,*) subname,' Reading snow_nml'
+         rewind(unit=nu_nml, iostat=nml_error)
+         if (nml_error /= 0) then
+            call abort_ice(subname//'ERROR: snow_nml rewind ', &
+               file=__FILE__, line=__LINE__)
+         endif
+         nml_error =  1
+         do while (nml_error > 0)
+            read(nu_nml, nml=snow_nml,iostat=nml_error)
+         end do
+         if (nml_error /= 0) then
+            call abort_ice(subname//'ERROR: snow_nml reading ', &
+               file=__FILE__, line=__LINE__)
+         endif
+
+         write(nu_diag,*) subname,' Reading forcing_nml'
+         rewind(unit=nu_nml, iostat=nml_error)
+         if (nml_error /= 0) then
+            call abort_ice(subname//'ERROR: forcing_nml rewind ', &
+               file=__FILE__, line=__LINE__)
+         endif
+         nml_error =  1
+         do while (nml_error > 0)
+            read(nu_nml, nml=forcing_nml,iostat=nml_error)
+         end do
+         if (nml_error /= 0) then
+            call abort_ice(subname//'ERROR: forcing_nml reading ', &
+               file=__FILE__, line=__LINE__)
+         endif
+
+         close(nu_nml)
+         call release_fileunit(nu_nml)
       endif
-      call broadcast_scalar(nml_error, master_task)
-      if (nml_error /= 0) then
-         call abort_ice(subname//'ERROR: reading namelist', &
-            file=__FILE__, line=__LINE__)
-      endif
-      call release_fileunit(nu_nml)
 
       !-----------------------------------------------------------------
       ! set up diagnostics output and resolve conflicts
@@ -669,7 +813,8 @@
       call broadcast_scalar(kdyn,                 master_task)
       call broadcast_scalar(ndtd,                 master_task)
       call broadcast_scalar(ndte,                 master_task)
-      call broadcast_scalar(kevp_kernel,          master_task)
+      call broadcast_scalar(evp_algorithm,        master_task)
+      call broadcast_scalar(pgl_global_ext,       master_task)
       call broadcast_scalar(brlx,                 master_task)
       call broadcast_scalar(arlx,                 master_task)
       call broadcast_scalar(revised_evp,          master_task)
@@ -689,7 +834,8 @@
       call broadcast_scalar(alphab,               master_task)
       call broadcast_scalar(threshold_hw,         master_task)
       call broadcast_scalar(Ktens,                master_task)
-      call broadcast_scalar(e_ratio,              master_task)
+      call broadcast_scalar(e_yieldcurve,         master_task)
+      call broadcast_scalar(e_plasticpot,         master_task)
       call broadcast_scalar(advection,            master_task)
       call broadcast_scalar(conserv_check,        master_task)
       call broadcast_scalar(shortwave,            master_task)
@@ -734,6 +880,25 @@
       call broadcast_scalar(rfracmin,             master_task)
       call broadcast_scalar(rfracmax,             master_task)
       call broadcast_scalar(pndaspect,            master_task)
+      call broadcast_scalar(snwredist,            master_task)
+      call broadcast_scalar(snw_aging_table,      master_task)
+      call broadcast_scalar(snw_filename,         master_task)
+      call broadcast_scalar(snw_tau_fname,        master_task)
+      call broadcast_scalar(snw_kappa_fname,      master_task)
+      call broadcast_scalar(snw_drdt0_fname,      master_task)
+      call broadcast_scalar(snw_rhos_fname,       master_task)
+      call broadcast_scalar(snw_Tgrd_fname,       master_task)
+      call broadcast_scalar(snw_T_fname,          master_task)
+      call broadcast_scalar(snwgrain,             master_task)
+      call broadcast_scalar(use_smliq_pnd,        master_task)
+      call broadcast_scalar(rsnw_fall,            master_task)
+      call broadcast_scalar(rsnw_tmax,            master_task)
+      call broadcast_scalar(rhosnew,              master_task)
+      call broadcast_scalar(rhosmin,              master_task)
+      call broadcast_scalar(rhosmax,              master_task)
+      call broadcast_scalar(windmin,              master_task)
+      call broadcast_scalar(drhosdwind,           master_task)
+      call broadcast_scalar(snwlvlfac,            master_task)
       call broadcast_scalar(albicev,              master_task)
       call broadcast_scalar(albicei,              master_task)
       call broadcast_scalar(albsnowv,             master_task)
@@ -766,6 +931,7 @@
       call broadcast_scalar(wave_spec_file,       master_task)
       call broadcast_scalar(nfreq,                master_task)
       call broadcast_scalar(tfrz_option,          master_task)
+      call broadcast_scalar(saltflux_option,      master_task)
       call broadcast_scalar(ocn_data_format,      master_task)
       call broadcast_scalar(bgc_data_type,        master_task)
       call broadcast_scalar(fe_data_type,         master_task)
@@ -797,6 +963,8 @@
       call broadcast_scalar(restart_pond_lvl,     master_task)
       call broadcast_scalar(tr_pond_topo,         master_task)
       call broadcast_scalar(restart_pond_topo,    master_task)
+      call broadcast_scalar(tr_snow,              master_task)
+      call broadcast_scalar(restart_snow,         master_task)
       call broadcast_scalar(tr_iso,               master_task)
       call broadcast_scalar(restart_iso,          master_task)
       call broadcast_scalar(tr_aero,              master_task)
@@ -877,6 +1045,7 @@
             restart_pond_cesm =  .false.
             restart_pond_lvl =  .false.
             restart_pond_topo =  .false.
+            restart_snow = .false.
 ! tcraig, OK to leave as true, needed for boxrestore case
 !            restart_ext =  .false.
          else
@@ -891,6 +1060,10 @@
             write(nu_diag,*) subname//' ERROR: runtype unknown = ',trim(runtype)
          endif
          abort_list = trim(abort_list)//":1"
+      endif
+
+      if (ktransport <= 0) then
+         advection = 'none'
       endif
 
       if (ktransport > 0 .and. advection /= 'remap' .and. advection /= 'upwind') then
@@ -985,6 +1158,59 @@
          abort_list = trim(abort_list)//":8"
       endif
 
+      if (snwredist(1:4) /= 'none' .and. .not. tr_snow) then
+         if (my_task == master_task) then
+            write (nu_diag,*) 'ERROR: snwredist on but tr_snow=F'
+            write (nu_diag,*) 'ERROR: Use tr_snow=T for snow redistribution'
+         endif
+         abort_list = trim(abort_list)//":37"
+      endif
+      if (snwredist(1:4) == 'bulk' .and. .not. tr_lvl) then
+         if (my_task == master_task) then
+            write (nu_diag,*) 'ERROR: snwredist=bulk but tr_lvl=F'
+            write (nu_diag,*) 'ERROR: Use tr_lvl=T for snow redistribution'
+         endif
+         abort_list = trim(abort_list)//":38"
+      endif
+      if (snwredist(1:6) == 'ITDrdg' .and. .not. tr_lvl) then
+         if (my_task == master_task) then
+            write (nu_diag,*) 'ERROR: snwredist=ITDrdg but tr_lvl=F'
+            write (nu_diag,*) 'ERROR: Use tr_lvl=T for snow redistribution'
+         endif
+         abort_list = trim(abort_list)//":39"
+      endif
+      if (use_smliq_pnd .and. .not. snwgrain) then
+         if (my_task == master_task) then
+            write (nu_diag,*) 'ERROR: use_smliq_pnd = T but'
+            write (nu_diag,*) 'ERROR: snow metamorphosis not used'
+            write (nu_diag,*) 'ERROR: Use snwgrain=T with smliq for ponds'
+         endif
+         abort_list = trim(abort_list)//":40"
+      endif
+      if (use_smliq_pnd .and. .not. tr_snow) then
+         if (my_task == master_task) then
+            write (nu_diag,*) 'ERROR: use_smliq_pnd = T but'
+            write (nu_diag,*) 'ERROR: snow tracers are not active'
+            write (nu_diag,*) 'ERROR: Use tr_snow=T with smliq for ponds'
+         endif
+         abort_list = trim(abort_list)//":41"
+      endif
+      if (snwgrain .and. .not. tr_snow) then
+         if (my_task == master_task) then
+            write (nu_diag,*) 'ERROR: snwgrain=T but tr_snow=F'
+            write (nu_diag,*) 'ERROR: Use tr_snow=T for snow metamorphosis'
+         endif
+         abort_list = trim(abort_list)//":42"
+      endif
+      if (trim(snw_aging_table) /= 'test' .and. &
+          trim(snw_aging_table) /= 'snicar' .and. &
+          trim(snw_aging_table) /= 'file') then
+         if (my_task == master_task) then
+            write (nu_diag,*) 'ERROR: unknown snw_aging_table = '//trim(snw_aging_table)
+         endif
+         abort_list = trim(abort_list)//":43"
+      endif
+
       if (tr_iso .and. n_iso==0) then
          if (my_task == master_task) then
             write(nu_diag,*) subname//' ERROR: isotopes activated but'
@@ -1014,7 +1240,7 @@
          if (my_task == master_task) then
             write(nu_diag,*) subname//' ERROR: nilyr < 1'
          endif
-         abort_list = trim(abort_list)//":33"
+         abort_list = trim(abort_list)//":2"
       endif
 
       if (nslyr < 1) then
@@ -1046,6 +1272,13 @@
             write(nu_diag,*) subname//' ERROR:   Must use shortwave=dEdd'
          endif
          abort_list = trim(abort_list)//":10"
+      endif
+
+      if (trim(shortwave) /= 'dEdd' .and. snwgrain) then
+         if (my_task == master_task) then
+            write (nu_diag,*) 'WARNING: snow grain radius activated but'
+            write (nu_diag,*) 'WARNING: dEdd shortwave is not.'
+         endif
       endif
 
       if ((rfracmin < -puny .or. rfracmin > c1+puny) .or. &
@@ -1090,6 +1323,14 @@
             write(nu_diag,*) subname//' WARNING: ktherm = 1 and sw_redist = ',sw_redist
             write(nu_diag,*) subname//' WARNING:   For consistency, set sw_redist = .true.'
          endif
+      endif
+
+      if (trim(atmbndy) == 'default') then
+         if (my_task == master_task) then
+            write(nu_diag,*) subname//' WARNING: atmbndy = default is deprecated'
+            write(nu_diag,*) subname//' WARNING:   setting atmbndy = similarity'
+         endif
+         atmbndy = 'similarity'
       endif
 
       if (formdrag) then
@@ -1293,16 +1534,16 @@
                   tmpstr2 = ' : revised EVP formulation not used'
                endif
                write(nu_diag,1010) ' revised_evp      = ', revised_evp,trim(tmpstr2)
-
-               if (kevp_kernel == 0) then
-                  tmpstr2 = ' : original EVP solver'
-               elseif (kevp_kernel == 2 .or. kevp_kernel == 102) then
-                  tmpstr2 = ' : vectorized EVP solver'
+       
+               if (evp_algorithm == 'standard_2d') then
+                  tmpstr2 = ' : standard 2d EVP solver'
+               elseif (evp_algorithm == 'shared_mem_1d') then
+                  tmpstr2 = ' : vectorized 1d EVP solver'
+                  pgl_global_ext = .true.
                else
                   tmpstr2 = ' : unknown value'
                endif
-               write(nu_diag,1020) ' kevp_kernel      = ', kevp_kernel,trim(tmpstr2)
-
+               write(nu_diag,1031) ' evp_algorithm    = ', trim(evp_algorithm),trim(tmpstr2)
                write(nu_diag,1020) ' ndtd             = ', ndtd, ' : number of dynamics/advection/ridging/steps per thermo timestep'
                write(nu_diag,1020) ' ndte             = ', ndte, ' : number of EVP or EAP subcycles'
             endif
@@ -1310,9 +1551,10 @@
             if (kdyn == 1 .or. kdyn == 3) then
                write(nu_diag,1030) ' yield_curve      = ', trim(yield_curve)
                if (trim(yield_curve) == 'ellipse') &
-               write(nu_diag,1002) ' e_ratio          = ', e_ratio, ' : aspect ratio of ellipse'
+                    write(nu_diag,1002) ' e_yieldcurve     = ', e_yieldcurve, ' : aspect ratio of yield curve'
+                    write(nu_diag,1002) ' e_plasticpot     = ', e_plasticpot, ' : aspect ratio of plastic potential'
             endif
-
+            
             if (trim(coriolis) == 'latitude') then
                tmpstr2 = ' : latitude-dependent Coriolis parameter'
             elseif (trim(coriolis) == 'contant') then
@@ -1333,9 +1575,6 @@
             endif
             write(nu_diag,1030) ' ssh_stress       = ',trim(ssh_stress),trim(tmpstr2)
 
-            if (ktransport <= 0) then
-               advection = 'none'
-            endif
             if (trim(advection) == 'remap') then
                tmpstr2 = ' : linear remapping advection'
             elseif (trim(advection) == 'upwind') then
@@ -1519,13 +1758,18 @@
          write(nu_diag,1010) ' rotate_wind      = ', rotate_wind,' : rotate wind/stress to computational grid'
          write(nu_diag,1010) ' formdrag         = ', formdrag,' : use form drag parameterization'
          write(nu_diag,1000) ' iceruf           = ', iceruf, ' : ice surface roughness at atmosphere interface (m)'
-         if (trim(atmbndy) == 'default') then
-            tmpstr2 = ' : stability-based boundary layer'
+         if (trim(atmbndy) == 'constant') then
+            tmpstr2 = ' : constant-based boundary layer'
+         elseif (trim(atmbndy) == 'similarity' .or. &
+                 trim(atmbndy) == 'mixed') then
             write(nu_diag,1010) ' highfreq         = ', highfreq,' : high-frequency atmospheric coupling'
             write(nu_diag,1020) ' natmiter         = ', natmiter,' : number of atmo boundary layer iterations'
             write(nu_diag,1002) ' atmiter_conv     = ', atmiter_conv,' : convergence criterion for ustar'
-         elseif (trim(atmbndy) == 'constant') then
-            tmpstr2 = ' : boundary layer uses bulk transfer coefficients'
+            if (trim(atmbndy) == 'similarity') then
+               tmpstr2 = ' : stability-based boundary layer'
+            else
+               tmpstr2 = ' : stability-based boundary layer for wind stress, constant-based for sensible+latent heat fluxes'
+            endif
          else
             tmpstr2 = ' : unknown value'
          endif
@@ -1653,6 +1897,78 @@
          write(nu_diag,1002) ' rfracmax         = ', rfracmax,' : maximum fraction of melt water added to ponds'
 
          write(nu_diag,*) ' '
+         write(nu_diag,*) ' Snow redistribution/metamorphism tracers'
+         write(nu_diag,*) '-----------------------------------------'
+         if (tr_snow) then
+            write(nu_diag,1010) ' tr_snow          = ', tr_snow, &
+                                ' : advanced snow physics'
+            if (snwredist(1:4) == 'none') then
+               write(nu_diag,1030) ' snwredist        = ', trim(snwredist), &
+                                   ' : Snow redistribution scheme turned off'
+            else
+               if (snwredist(1:4) == 'bulk') then
+                  write(nu_diag,1030) ' snwredist        = ', trim(snwredist), &
+                                      ' : Using bulk snow redistribution scheme'
+               elseif (snwredist(1:6) == 'ITDrdg') then
+                  write(nu_diag,1030) ' snwredist        = ', trim(snwredist), &
+                                      ' : Using ridging based snow redistribution scheme'
+                  write(nu_diag,1002) ' rhosnew          = ', rhosnew, &
+                                      ' : new snow density (kg/m^3)'
+                  write(nu_diag,1002) ' rhosmin          = ', rhosmin, &
+                                      ' : minimum snow density (kg/m^3)'
+                  write(nu_diag,1002) ' rhosmax          = ', rhosmax, &
+                                      ' : maximum snow density (kg/m^3)'
+                  write(nu_diag,1002) ' windmin          = ', windmin, &
+                                      ' : minimum wind speed to compact snow (m/s)'
+                  write(nu_diag,1002) ' drhosdwind       = ', drhosdwind, &
+                                      ' : wind compaction factor (kg s/m^4)'
+               endif
+               write(nu_diag,1002) ' snwlvlfac        = ', snwlvlfac, &
+                                   ' : fractional increase in snow depth for redistribution on ridges'
+            endif
+            if (.not. snwgrain) then
+               write(nu_diag,1010) ' snwgrain         = ', snwgrain, &
+                                   ' : Snow metamorphosis turned off'
+            else
+               write(nu_diag,1010) ' snwgrain         = ', snwgrain, &
+                                   ' : Using snow metamorphosis scheme'
+               write(nu_diag,1002) ' rsnw_tmax        = ', rsnw_tmax, &
+                                   ' : maximum snow radius (10^-6 m)'
+            endif
+            write(nu_diag,1002) ' rsnw_fall        = ', rsnw_fall, &
+                                ' : radius of new snow (10^-6 m)'
+            if (snwgrain) then
+               if (use_smliq_pnd) then
+                  tmpstr2 = ' : Using liquid water in snow for melt ponds'
+               else
+                  tmpstr2 = ' : NOT using liquid water in snow for melt ponds'
+               endif
+                  write(nu_diag,1010) ' use_smliq_pnd    = ', use_smliq_pnd, trim(tmpstr2)
+               if (snw_aging_table == 'test') then
+                  tmpstr2 = ' : Using 5x5x1 test matrix of internallly defined snow aging parameters'
+                  write(nu_diag,1030) ' snw_aging_table  = ', trim(snw_aging_table),trim(tmpstr2)
+               elseif (snw_aging_table == 'snicar') then
+                  tmpstr2 = ' : Reading 3D snow aging parameters from SNICAR file'
+                  write(nu_diag,1030) ' snw_aging_table  = ', trim(snw_aging_table),trim(tmpstr2)
+                  write(nu_diag,1031) ' snw_filename     = ',trim(snw_filename)
+                  write(nu_diag,1031) ' snw_tau_fname    = ',trim(snw_tau_fname)
+                  write(nu_diag,1031) ' snw_kappa_fname  = ',trim(snw_kappa_fname)
+                  write(nu_diag,1031) ' snw_drdt0_fname  = ',trim(snw_drdt0_fname)
+               elseif (snw_aging_table == 'file') then
+                  tmpstr2 = ' : Reading 1D and 3D snow aging dimensions and parameters from external file'
+                  write(nu_diag,1030) ' snw_aging_table  = ', trim(snw_aging_table),trim(tmpstr2)
+                  write(nu_diag,1031) ' snw_filename     = ',trim(snw_filename)
+                  write(nu_diag,1031) ' snw_rhos_fname   = ',trim(snw_rhos_fname)
+                  write(nu_diag,1031) ' snw_Tgrd_fname   = ',trim(snw_Tgrd_fname)
+                  write(nu_diag,1031) ' snw_T_fname      = ',trim(snw_T_fname)
+                  write(nu_diag,1031) ' snw_tau_fname    = ',trim(snw_tau_fname)
+                  write(nu_diag,1031) ' snw_kappa_fname  = ',trim(snw_kappa_fname)
+                  write(nu_diag,1031) ' snw_drdt0_fname  = ',trim(snw_drdt0_fname)
+               endif
+            endif
+         endif
+
+         write(nu_diag,*) ' '
          write(nu_diag,*) ' Primary state variables, tracers'
          write(nu_diag,*) '   (excluding biogeochemistry)'
          write(nu_diag,*) '---------------------------------'
@@ -1665,6 +1981,7 @@
          if (tr_pond_lvl)  write(nu_diag,1010) ' tr_pond_lvl      = ', tr_pond_lvl,' : level-ice pond formulation'
          if (tr_pond_topo) write(nu_diag,1010) ' tr_pond_topo     = ', tr_pond_topo,' : topo pond formulation'
          if (tr_pond_cesm) write(nu_diag,1010) ' tr_pond_cesm     = ', tr_pond_cesm,' : CESM pond formulation'
+         if (tr_snow)      write(nu_diag,1010) ' tr_snow          = ', tr_snow,' : advanced snow physics'
          if (tr_iage)      write(nu_diag,1010) ' tr_iage          = ', tr_iage,' : chronological ice age'
          if (tr_FY)        write(nu_diag,1010) ' tr_FY            = ', tr_FY,' : first-year ice area'
          if (tr_iso)       write(nu_diag,1010) ' tr_iso           = ', tr_iso,' : diagnostic isotope tracers'
@@ -1702,13 +2019,13 @@
          write(nu_diag,1023) ' histfreq_n       = ', histfreq_n(:)
          write(nu_diag,1031) ' histfreq_base    = ', trim(histfreq_base)
          write(nu_diag,1011) ' hist_avg         = ', hist_avg
-         if (.not. hist_avg) write(nu_diag,1031) ' History data will be snapshots'
+         if (.not. hist_avg) write(nu_diag,1039) ' History data will be snapshots'
          write(nu_diag,1031) ' history_dir      = ', trim(history_dir)
          write(nu_diag,1031) ' history_file     = ', trim(history_file)
          write(nu_diag,1021) ' history_precision= ', history_precision
          write(nu_diag,1031) ' history_format   = ', trim(history_format)
          if (write_ic) then
-            write(nu_diag,1031) ' Initial condition will be written in ', &
+            write(nu_diag,1039) ' Initial condition will be written in ', &
                                trim(incond_dir)
          endif
          write(nu_diag,1031) ' dumpfreq         = ', trim(dumpfreq)
@@ -1786,6 +2103,7 @@
          write(nu_diag,1011) ' restart_pond_cesm= ', restart_pond_cesm
          write(nu_diag,1011) ' restart_pond_lvl = ', restart_pond_lvl
          write(nu_diag,1011) ' restart_pond_topo= ', restart_pond_topo
+         write(nu_diag,1011) ' restart_snow     = ', restart_snow
          write(nu_diag,1011) ' restart_iso      = ', restart_iso
          write(nu_diag,1011) ' restart_aero     = ', restart_aero
          write(nu_diag,1011) ' restart_fsd      = ', restart_fsd
@@ -1815,19 +2133,11 @@
          abort_list = trim(abort_list)//":20"
       endif
 
-      ! check for valid kevp_kernel
-      ! tcraig, kevp_kernel=2 is not validated, do not allow use
-      !         use "102" to test "2" for now
-      if (kevp_kernel /= 0) then
-         if (kevp_kernel == 102) then
-            kevp_kernel = 2
-         else
-            if (my_task == master_task) write(nu_diag,*) subname//' ERROR: kevp_kernel = ',kevp_kernel
-            if (kevp_kernel == 2) then
-                if (my_task == master_task) write(nu_diag,*) subname//' kevp_kernel=2 not validated, use kevp_kernel=102 for testing until it is validated'
-            endif
-            abort_list = trim(abort_list)//":21"
-        endif
+      if (kdyn         == 1                .and. &
+          evp_algorithm /= 'standard_2d'   .and. &
+          evp_algorithm /= 'shared_mem_1d') then 
+         if (my_task == master_task) write(nu_diag,*) subname//' ERROR: unknown evp_algorithm=',trim(evp_algorithm)
+             abort_list = trim(abort_list)//":21" 
       endif
 
       if (abort_list /= "") then
@@ -1857,11 +2167,16 @@
          wave_spec_type_in = wave_spec_type, &
          wave_spec_in=wave_spec, nfreq_in=nfreq, &
          tfrz_option_in=tfrz_option, kalg_in=kalg, fbot_xfer_type_in=fbot_xfer_type, &
+         saltflux_option_in=saltflux_option, &
          Pstar_in=Pstar, Cstar_in=Cstar, iceruf_in=iceruf, iceruf_ocn_in=iceruf_ocn, calc_dragio_in=calc_dragio, &
+         windmin_in=windmin, drhosdwind_in=drhosdwind, &
+         rsnw_fall_in=rsnw_fall, rsnw_tmax_in=rsnw_tmax, rhosnew_in=rhosnew, &
+         snwlvlfac_in=snwlvlfac, rhosmin_in=rhosmin, rhosmax_in=rhosmax, &
+         snwredist_in=snwredist, snwgrain_in=snwgrain, snw_aging_table_in=trim(snw_aging_table), &
          sw_redist_in=sw_redist, sw_frac_in=sw_frac, sw_dtemp_in=sw_dtemp)
       call icepack_init_tracer_flags(tr_iage_in=tr_iage, tr_FY_in=tr_FY, &
          tr_lvl_in=tr_lvl, tr_iso_in=tr_iso, tr_aero_in=tr_aero, &
-         tr_fsd_in=tr_fsd, tr_pond_in=tr_pond, &
+         tr_fsd_in=tr_fsd, tr_snow_in=tr_snow, tr_pond_in=tr_pond, &
          tr_pond_cesm_in=tr_pond_cesm, tr_pond_lvl_in=tr_pond_lvl, tr_pond_topo_in=tr_pond_topo)
       call icepack_init_tracer_sizes(ncat_in=ncat, nilyr_in=nilyr, nslyr_in=nslyr, nblyr_in=nblyr, &
          nfsd_in=nfsd, n_algae_in=n_algae, n_iso_in=n_iso, n_aero_in=n_aero, &
@@ -1883,6 +2198,7 @@
  1030    format (a20,a14,1x,a)    ! character
  1031    format (a20,1x,a,a)
  1033    format (a20,1x,6a6)
+ 1039    format (a,1x,a,1x,a,1x,a)
 
       end subroutine input_data
 
@@ -1922,10 +2238,12 @@
          heat_capacity   ! from icepack
 
       integer (kind=int_kind) :: ntrcr
-      logical (kind=log_kind) :: tr_iage, tr_FY, tr_lvl, tr_iso, tr_aero, tr_fsd
+      logical (kind=log_kind) :: tr_iage, tr_FY, tr_lvl, tr_iso, tr_aero
       logical (kind=log_kind) :: tr_pond_cesm, tr_pond_lvl, tr_pond_topo
+      logical (kind=log_kind) :: tr_snow, tr_fsd
       integer (kind=int_kind) :: nt_Tsfc, nt_sice, nt_qice, nt_qsno, nt_iage, nt_FY
       integer (kind=int_kind) :: nt_alvl, nt_vlvl, nt_apnd, nt_hpnd, nt_ipnd
+      integer (kind=int_kind) :: nt_smice, nt_smliq, nt_rhos, nt_rsnw
       integer (kind=int_kind) :: nt_isosno, nt_isoice, nt_aero, nt_fsd
 
       type (block) :: &
@@ -1938,12 +2256,15 @@
       call icepack_query_parameters(heat_capacity_out=heat_capacity)
       call icepack_query_tracer_sizes(ntrcr_out=ntrcr)
       call icepack_query_tracer_flags(tr_iage_out=tr_iage, tr_FY_out=tr_FY, &
-        tr_lvl_out=tr_lvl, tr_iso_out=tr_iso, tr_aero_out=tr_aero, tr_fsd_out=tr_fsd, &
-        tr_pond_cesm_out=tr_pond_cesm, tr_pond_lvl_out=tr_pond_lvl, tr_pond_topo_out=tr_pond_topo)
+        tr_lvl_out=tr_lvl, tr_iso_out=tr_iso, tr_aero_out=tr_aero, &
+        tr_pond_cesm_out=tr_pond_cesm, tr_pond_lvl_out=tr_pond_lvl, tr_pond_topo_out=tr_pond_topo, &
+        tr_snow_out=tr_snow, tr_fsd_out=tr_fsd)
       call icepack_query_tracer_indices(nt_Tsfc_out=nt_Tsfc, nt_sice_out=nt_sice, &
         nt_qice_out=nt_qice, nt_qsno_out=nt_qsno, nt_iage_out=nt_iage, nt_fy_out=nt_fy, &
         nt_alvl_out=nt_alvl, nt_vlvl_out=nt_vlvl, nt_apnd_out=nt_apnd, nt_hpnd_out=nt_hpnd, &
         nt_ipnd_out=nt_ipnd, nt_aero_out=nt_aero, nt_fsd_out=nt_fsd, &
+        nt_smice_out=nt_smice, nt_smliq_out=nt_smliq, &
+        nt_rhos_out=nt_rhos, nt_rsnw_out=nt_rsnw, &
         nt_isosno_out=nt_isosno, nt_isoice_out=nt_isoice)
 
       call icepack_warnings_flush(nu_diag)
@@ -2019,6 +2340,14 @@
                    trcr_depend(nt_apnd)  = 0           ! melt pond area
                    trcr_depend(nt_hpnd)  = 2+nt_apnd   ! melt pond depth
                    trcr_depend(nt_ipnd)  = 2+nt_apnd   ! refrozen pond lid
+      endif
+      if (tr_snow) then                                ! snow-volume-weighted snow tracers
+         do k = 1, nslyr
+            trcr_depend(nt_smice + k - 1) = 2          ! ice mass in snow
+            trcr_depend(nt_smliq + k - 1) = 2          ! liquid mass in snow
+            trcr_depend(nt_rhos  + k - 1) = 2          ! effective snow density
+            trcr_depend(nt_rsnw  + k - 1) = 2          ! snow radius
+         enddo
       endif
       if (tr_fsd) then
          do it = 1, nfsd
@@ -2266,7 +2595,7 @@
 
 #ifndef NEMO_IN_CCSM
       real (kind=dbl_kind) :: &
-         Tsfc, sum, hbar, puny, rhos, Lfresh, rad_to_deg
+         Tsfc, sum, hbar, puny, rhos, Lfresh, rad_to_deg, rsnw_fall, Tffresh
 
       real (kind=dbl_kind), dimension(ncat) :: &
          ainit, hinit    ! initial area, thickness
@@ -2295,22 +2624,26 @@
 
 #endif
 
-      logical (kind=log_kind) :: tr_brine, tr_lvl
+      logical (kind=log_kind) :: tr_brine, tr_lvl, tr_snow
       integer (kind=int_kind) :: ntrcr
       integer (kind=int_kind) :: nt_Tsfc, nt_qice, nt_qsno, nt_sice
       integer (kind=int_kind) :: nt_fbri, nt_alvl, nt_vlvl
+      integer (kind=int_kind) :: nt_smice, nt_smliq, nt_rhos, nt_rsnw
 
       character(len=*), parameter :: subname='(set_state_var)'
 
       !-----------------------------------------------------------------
 
       call icepack_query_tracer_sizes(ntrcr_out=ntrcr)
-      call icepack_query_tracer_flags(tr_brine_out=tr_brine, tr_lvl_out=tr_lvl)
+      call icepack_query_tracer_flags(tr_brine_out=tr_brine, tr_lvl_out=tr_lvl, &
+        tr_snow_out=tr_snow)
       call icepack_query_tracer_indices( nt_Tsfc_out=nt_Tsfc, nt_qice_out=nt_qice, &
         nt_qsno_out=nt_qsno, nt_sice_out=nt_sice, &
-        nt_fbri_out=nt_fbri, nt_alvl_out=nt_alvl, nt_vlvl_out=nt_vlvl)
+        nt_fbri_out=nt_fbri, nt_alvl_out=nt_alvl, nt_vlvl_out=nt_vlvl, &
+        nt_smice_out=nt_smice, nt_smliq_out=nt_smliq, &
+        nt_rhos_out=nt_rhos, nt_rsnw_out=nt_rsnw)
       call icepack_query_parameters(rhos_out=rhos, Lfresh_out=Lfresh, puny_out=puny, &
-        rad_to_deg_out=rad_to_deg)
+        rad_to_deg_out=rad_to_deg, rsnw_fall_out=rsnw_fall, Tffresh_out=Tffresh)
       call icepack_warnings_flush(nu_diag)
 #ifdef NEMO_IN_CCSM
       call icepack_query_parameters(heat_capacity_out=heat_capacity)
@@ -2345,6 +2678,14 @@
             do k = 1, nslyr
                trcrn(i,j,nt_qsno+k-1,n) = -rhos * Lfresh
             enddo
+            if (tr_snow) then
+               do k = 1, nslyr
+                  trcrn(i,j,nt_rsnw +k-1,n) = rsnw_fall
+                  trcrn(i,j,nt_rhos +k-1,n) = rhos
+                  trcrn(i,j,nt_smice+k-1,n) = rhos
+                  trcrn(i,j,nt_smliq+k-1,n) = c0
+               enddo               ! nslyr
+            endif
          enddo
          enddo
       enddo
@@ -2430,7 +2771,9 @@
          do i = ilo, ihi
             if (tmask(i,j)) then
                ! place ice in high latitudes where ocean sfc is cold
-               if ( (sst (i,j) <= Tf(i,j)+p2) .and. &
+!              if ( (sst (i,j) <= Tf(i,j)+p2) .and. &
+               ! place ice in high latitudes where Tair is cold
+               if ( (Tair (i,j) <= Tffresh) .and. &
                     (TLAT(i,j) < edge_init_sh/rad_to_deg .or. &
                      TLAT(i,j) > edge_init_nh/rad_to_deg) ) then
                   icells = icells + 1
