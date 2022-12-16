@@ -2606,7 +2606,7 @@
          edge_init_sh = -60._dbl_kind    ! initial ice edge, S.Hem. (deg)
 #else
       real (kind=dbl_kind) :: &
-         Tsfc, sum(2), hbar, puny, rhos, Lfresh, rad_to_deg
+         Tsfc, sum(2), hbar, puny, rhos, Lfresh, rad_to_deg, rsnw_fall, Tffresh
 
       real (kind=dbl_kind), dimension(ncat,2) :: &
          ainit, hinit    ! initial area, thickness
