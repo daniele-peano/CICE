@@ -12,6 +12,9 @@ module ice_mesh_mod
   use ice_exit         , only : abort_ice
   use icepack_intfc    , only : icepack_query_parameters
   use icepack_intfc    , only : icepack_warnings_flush, icepack_warnings_aborted
+#ifdef CESMCOUPLED
+  use pio
+#endif
 
   implicit none
   private
@@ -206,11 +209,15 @@ contains
   !=======================================================================
   subroutine ice_mesh_setmask_from_maskfile(ice_maskfile, ice_mesh, rc)
 
-    use ice_grid      , only : tlon, tlat, hm, tarea
+    use ice_grid     , only : tlon, tlat, hm, tarea
+   use ice_constants , only : c0, c1, c2, p25, radius
 #ifdef NEMO_IN_CCSM
-    use ice_grid      , only : hm_i, tmask_i
+    use ice_grid     , only : hm_i, tmask_i
 #endif 
-    use ice_constants , only : c0, c1, c2, p25, radius
+#ifdef CESMCOUPLED
+   use shr_pio_mod   , only : shr_pio_getiosys, shr_pio_getiotype
+   use ice_fileunits , only : inst_name
+#endif
 
     ! input/output variables
     character(len=*) , intent(in)    :: ice_maskfile
@@ -250,13 +257,52 @@ contains
     real(dbl_kind)              :: c180
     real(dbl_kind)              :: puny
     real(dbl_kind)              :: deg_to_rad
+#ifdef CESMCOUPLED
+    type(ESMF_Grid)             :: grid_mask        ! SCRIP input grid
+    integer                     :: dimid            ! needed to check mesh format
+    integer                     :: rcode            ! needed to check mesh format
+    integer                     :: old_error_handle ! needed to check mesh format
+    integer                     :: pio_iotype
+    type(file_desc_t)           :: pioid            ! needed to check mesh format
+    type(iosystem_desc_t), pointer :: ice_pio_subsystem
+#endif
     character(len=*), parameter :: subname = ' ice_mesh_setmask_from_maskfile'
     !---------------------------------------------------
 
     rc = ESMF_SUCCESS
 
+#ifdef CESMCOUPLED
+    ice_pio_subsystem => shr_pio_getiosys(inst_name)
+    pio_iotype = shr_pio_getiotype(inst_name)
+    rcode = pio_openfile(ice_pio_subsystem, pioid, pio_iotype, trim(ice_maskfile), PIO_NOWRITE)
+    call PIO_seterrorhandling(pioid, PIO_BCAST_ERROR, old_error_handle)
+    rcode = pio_inq_dimid (pioid, 'elementCount', dimid) ! Mesh format
+    if (rcode == PIO_NOERR) then
+       if (my_task == master_task) then
+          write(nu_diag,'(a)') ' (ice_mesh_mod): input mesh format for cice is ESMF_FILEFORMAT_MESH'
+       end if
+       mesh_mask = ESMF_MeshCreate(trim(ice_maskfile), fileformat=ESMF_FILEFORMAT_ESMFMESH, rc=rc)
+       if (ChkErr(rc,__LINE__,u_FILE_u)) return
+    else
+       rcode = pio_inq_dimid (pioid, 'grid_size', dimid)  ! SCRIP format
+       if (rcode == PIO_NOERR) then
+          if (my_task == master_task) then
+             write(nu_diag, '(a)') ' (ice_mesh_mod): input mesh format for cice is ESMF_FILEFORMAT_SCRIP'
+          end if
+          grid_mask = ESMF_GridCreate(filename=trim(ice_maskfile),fileformat=ESMF_FILEFORMAT_SCRIP, addCornerStagger=.true., rc=rc)
+          if (ChkErr(rc,__LINE__,u_FILE_u)) return
+          mesh_mask = ESMF_MeshCreate(grid=grid_mask, rc=rc)
+          if (ChkErr(rc,__LINE__,u_FILE_u)) return
+       else
+          call abort_ice(' (ice_mesh_mod): input mesh must either have ESMF_FILEFORMAT_ESMFMESH or ESMF_FILEFORMAT_SCRIP')
+       end if
+    end if
+    call PIO_seterrorhandling(pioid, old_error_handle)
+    call pio_closefile(pioid)
+#else
     mesh_mask = ESMF_MeshCreate(trim(ice_maskfile), fileformat=ESMF_FILEFORMAT_ESMFMESH, rc=rc)
     if (ChkErr(rc,__LINE__,u_FILE_u)) return
+#endif
 
     call ESMF_MeshGet(ice_mesh, spatialDim=spatialDim, numOwnedElements=lsize_dst, rc=rc)
     if (ChkErr(rc,__LINE__,u_FILE_u)) return
